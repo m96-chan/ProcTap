@@ -4,26 +4,26 @@ from typing import Callable, Optional, AsyncIterator
 import threading
 import queue
 import asyncio
-import struct
+import logging
 
-from . import _native  # C++拡張
+from ._backend_wasapi import WASAPIProcessLoopback  # ← さっきコピーしたクラス
+
+logger = logging.getLogger(__name__)
 
 AudioCallback = Callable[[bytes, int], None]  # (pcm_bytes, num_frames)
 
-
 @dataclass
 class StreamConfig:
-  sample_rate: int = 48000
-  channels: int = 2
-  frames_per_buffer: int = 480  # 10ms @ 48kHz
+    sample_rate: int = 48000
+    channels: int = 2
+    # WASAPIProcessLoopback は「フレーム数の指定」はしてないので、
+    # ここはあくまで「論理的なフレームサイズ」の扱いにしておく
+    frames_per_buffer: int = 480  # 10ms @ 48kHz
 
 
 class ProcessAudioTap:
     """
-    High-level API for per-process WASAPI loopback capture.
-
-    - pid: 対象プロセスID（推奨）
-    - on_data: コールバック。pcm_bytes, num_frames を受け取る
+    High-level API wrapping WASAPIProcessLoopback.
     """
 
     def __init__(
@@ -32,31 +32,28 @@ class ProcessAudioTap:
         config: StreamConfig | None = None,
         on_data: Optional[AudioCallback] = None,
     ) -> None:
-        if config is None:
-            config = StreamConfig()
         self._pid = pid
-        self._cfg = config
+        self._cfg = config or StreamConfig()
         self._on_data = on_data
 
-        self._handle: Optional[int] = None
+        self._loopback = WASAPIProcessLoopback(process_id=pid)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-
-        # async 用キュー
         self._async_queue: "queue.Queue[bytes]" = queue.Queue()
 
     # --- public API ---
 
     def start(self) -> None:
-        if self._handle is not None:
+        if self._thread is not None:
             return
 
-        self._handle = _native.open_stream(
-            self._pid,
-            self._cfg.sample_rate,
-            self._cfg.channels,
-            self._cfg.frames_per_buffer,
-        )
+        ok = self._loopback.initialize()
+        if not ok:
+            raise RuntimeError("Failed to initialize WASAPI loopback")
+
+        ok = self._loopback.start_capture()
+        if not ok:
+            raise RuntimeError("Failed to start WASAPI capture")
 
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._worker, daemon=True)
@@ -68,9 +65,15 @@ class ProcessAudioTap:
             self._thread.join(timeout=1.0)
             self._thread = None
 
-        if self._handle is not None:
-            _native.close_stream(self._handle)
-            self._handle = None
+        try:
+            self._loopback.stop_capture()
+        except Exception:
+            logger.exception("Error while stopping capture")
+
+        try:
+            self._loopback.cleanup()
+        except Exception:
+            logger.exception("Error during WASAPI cleanup")
 
     def close(self) -> None:
         self.stop()
@@ -89,36 +92,44 @@ class ProcessAudioTap:
         Async generator that yields PCM chunks as bytes.
         """
         loop = asyncio.get_running_loop()
-
         while True:
-            # blocking queue.get() をスレッドプールで回す
             chunk = await loop.run_in_executor(None, self._async_queue.get)
             if chunk is None:  # sentinel
                 break
             yield chunk
 
-    # --- internal worker ---
+    # --- worker thread ---
 
     def _worker(self) -> None:
-        assert self._handle is not None
+        """
+        Loop:
+            data = loopback.read_data()
+            -> callback
+            -> async_queue
+        """
         while not self._stop_event.is_set():
-            pcm = _native.read_stream(self._handle, self._cfg.frames_per_buffer)
-            if not pcm:
+            try:
+                data = self._loopback.read_data()
+            except Exception:
+                logger.exception("Error reading data from WASAPI")
+                continue
+
+            if not data:
+                # no packet yet → small sleepも検討してもよい
                 continue
 
             # callback
             if self._on_data is not None:
                 try:
-                    self._on_data(pcm, self._cfg.frames_per_buffer)
+                    self._on_data(data, -1)  # frame count は backend から取れてないので -1
                 except Exception:
-                    # ログは呼び出し側で差し込む余地を残す
-                    pass
+                    logger.exception("Error in audio callback")
 
-            # async 用にも流しておく
+            # async queue
             try:
-                self._async_queue.put_nowait(pcm)
+                self._async_queue.put_nowait(data)
             except queue.Full:
-                # 落とす（リアルタイム重視）
+                # drop oldest or ignore; for now just drop
                 pass
 
         # 終了シグナル
