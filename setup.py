@@ -1,18 +1,23 @@
-# setup.py （or setup_native.py でもOK）
 from setuptools import setup, Extension
-from pathlib import Path
+from setuptools import find_packages
+import os
 
-here = Path(__file__).parent
+if os.name != "nt":
+    raise RuntimeError("ProcessAudioTap _native backend is Windows only.")
 
-ext = Extension(
-    "processaudiotap._native",
-    sources=[str(here / "src" / "processaudiotap" / "_native.cpp")],
-    language="c++",
-    extra_compile_args=["/std:c++20"],
-    # Windows専用なので、必要ならライブラリや定義を追加
-    # libraries=["Ole32", "Mmdevapi", "Avrt"],
-)
+ext_modules = [
+    Extension(
+        "processaudiotap._native",
+        sources=["src/processaudiotap/_native.cpp"],
+        language="c++",
+        extra_compile_args=["/std:c++17"],
+    )
+]
 
 setup(
-    ext_modules=[ext],
+    name="ProcessAudioTap",
+    version="0.1.0",
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+    ext_modules=ext_modules,
 )

@@ -1,28 +1,18 @@
-[metadata]
-name = processaudiotap
-version = 0.1.0
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[options]
-package_dir =
-    = src
-packages = find:
-python_requires = >=3.10
+[project]
+name = "processaudiotap"
+version = "0.1.0"
+requires-python = ">=3.10"
 
-[options.packages.find]
-where = src
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "mypy",
+    "types-setuptools"
+]
 
-[options.extras_require]
-dev =
-    pytest
-    mypy
-    types-setuptools
-
-[build_ext]
-inplace = 0
-
-[options.entry_points]
-# CLI作るならここに script_name = processaudiotap.cli:main など
-
-[options.ext_modules]
-# ダミー。実際は setup.py or setup_native.py で定義してもよいが、
-# シンプルにするなら "setuptools.Extension" を setup.pyで書く方式もあり。
+[tool.setuptools.packages.find]
+where = ["src"]
