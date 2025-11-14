@@ -172,7 +172,7 @@ ProcessAudioTap/
 │     ├─ _native.cpp
 │     └─ _native.pyi
 ├─ examples/
-│  └─ record_vrchat_to_wav.py
+│  └─ record_proc_to_wav.py
 └─ .github/
    └─ workflows/
       └─ build-wheels.yml
@@ -274,3 +274,4 @@ MIT License
 **Yusuke Harada (m96-chan)**  
 Windows Audio / VRChat Tools / Python / C++  
 https://github.com/m96-chan
+
