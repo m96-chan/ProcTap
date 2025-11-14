@@ -683,7 +683,7 @@ static PyMethodDef ProcessLoopback_methods[] = {
 
 static PyTypeObject ProcessLoopbackType = {
     PyVarObject_HEAD_INIT(nullptr, 0)
-    /* tp_name */ processaudiotap._native.ProcessLoopback,
+    /* tp_name */ "processaudiotap._native.ProcessLoopback",
     /* tp_basicsize */ sizeof(ProcessLoopbackObject),
     /* tp_itemsize */ 0,
     /* tp_dealloc */ (destructor)ProcessLoopback_dealloc,
