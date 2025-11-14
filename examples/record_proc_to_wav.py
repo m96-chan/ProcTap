@@ -62,7 +62,7 @@ def main():
     wav = wave.open(args.output, "wb")
     wav.setnchannels(2)
     wav.setsampwidth(2)  # 16bit PCM
-    wav.setframerate(48000)
+    wav.setframerate(44100)
 
     def on_data(pcm, frames):
         wav.writeframes(pcm)

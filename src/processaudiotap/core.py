@@ -10,17 +10,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 # -------------------------------
-# Backend selection (native / python)
+# Native backend import
 # -------------------------------
 
 try:
-    # C++ extension backend
+    # C++ extension backend (required)
     from ._native import ProcessLoopback as _NativeLoopback  # type: ignore[attr-defined]
-except Exception:  # ImportError + その他ビルド前の状態もまとめてフォールバック
-    _NativeLoopback = None
-
-# Pure Python WASAPI backend (comtypes)
-from ._backend_wasapi import WASAPIProcessLoopback as _PythonLoopback
+except ImportError as e:
+    raise ImportError(
+        "Native extension (_native) could not be imported. "
+        "Please build the extension with: pip install -e .\n"
+        f"Original error: {e}"
+    ) from e
 
 AudioCallback = Callable[[bytes, int], None]  # (pcm_bytes, num_frames)
 
@@ -37,9 +38,9 @@ class StreamConfig:
 
 class _BackendWrapper:
     """
-    C++ native backend と pure Python backend の差異を吸収する薄いラッパー。
+    C++ native backend への薄いラッパー。
 
-    提供するインターフェースは core.py から見て統一:
+    提供するインターフェース:
         - initialize() -> bool
         - start_capture() -> bool
         - stop_capture() -> bool
@@ -49,51 +50,31 @@ class _BackendWrapper:
 
     def __init__(self, pid: int) -> None:
         self._pid = pid
-
-        if _NativeLoopback is not None:
-            logger.debug("Using native backend ProcessLoopback (C++ extension)")
-            self._backend = _NativeLoopback(pid)
-            self._is_native = True
-        else:
-            logger.debug("Using Python backend WASAPIProcessLoopback (comtypes)")
-            self._backend = _PythonLoopback(process_id=pid)
-            self._is_native = False
+        logger.debug("Using native backend ProcessLoopback (C++ extension)")
+        self._backend = _NativeLoopback(pid)
 
     def initialize(self) -> bool:
-        if self._is_native:
-            # C++ 側は __init__ の時点で初期化が済んでいる前提なので True を返すだけ
-            return True
-        return bool(self._backend.initialize())
+        # C++ 側は __init__ の時点で初期化が済んでいる前提なので True を返すだけ
+        return True
 
     def start_capture(self) -> bool:
-        if self._is_native:
-            self._backend.start()
-            return True
-        return bool(self._backend.start_capture())
+        self._backend.start()
+        return True
 
     def stop_capture(self) -> bool:
-        if self._is_native:
-            self._backend.stop()
-            return True
-        return bool(self._backend.stop_capture())
+        self._backend.stop()
+        return True
 
     def cleanup(self) -> None:
-        if self._is_native:
-            # C++ 側は dealloc で後片付けされるので特に何もしない
-            return
-        self._backend.cleanup()
+        # C++ 側は dealloc で後片付けされるので特に何もしない
+        pass
 
     def read_data(self) -> bytes:
         """
-        可能な限り 0 バイトではなく None or b"" を整形して返す。
+        ネイティブバックエンドからデータを読み取る。
+        データがない場合は空のbytesを返す。
         """
-        if self._is_native:
-            data = self._backend.read()
-            if not data:
-                return b""
-            return data
-        # Python backend は Optional[bytes] を返す
-        data = self._backend.read_data()
+        data = self._backend.read()
         if not data:
             return b""
         return data
