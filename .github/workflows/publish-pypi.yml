@@ -9,8 +9,8 @@ on:
         default: "v0.1.0"
 
 jobs:
-  build-and-upload-pypi:
-    runs-on: windows-latest   # C++ 拡張入り wheel を Windows でビルド
+  build-wheels:
+    runs-on: windows-latest   # C++ extension requires Windows
 
     steps:
       - name: Checkout repository at specified tag
@@ -32,9 +32,26 @@ jobs:
         run: |
           python -m build
 
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    needs: build-wheels
+    runs-on: ubuntu-latest   # pypa/gh-action-pypi-publish requires Linux
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
-          packages_dir: dist
+          packages-dir: dist/
