@@ -683,7 +683,7 @@ static PyMethodDef ProcessLoopback_methods[] = {
 
 static PyTypeObject ProcessLoopbackType = {
     PyVarObject_HEAD_INIT(nullptr, 0)
-    /* tp_name */ "wasapi_process_loopback_native.ProcessLoopback",
+    /* tp_name */ processaudiotap._native.ProcessLoopback,
     /* tp_basicsize */ sizeof(ProcessLoopbackObject),
     /* tp_itemsize */ 0,
     /* tp_dealloc */ (destructor)ProcessLoopback_dealloc,
@@ -722,30 +722,36 @@ static PyTypeObject ProcessLoopbackType = {
     /* tp_new */ ProcessLoopback_new,
 };
 
-static PyModuleDef wasapi_module = {
+// Module definition
+static struct PyModuleDef wasapi_module = {
     PyModuleDef_HEAD_INIT,
-    /* m_name */ "wasapi_process_loopback_native",
-    /* m_doc */ "WASAPI Process Loopback Native Extension",
-    /* m_size */ -1,
-    /* m_methods */ nullptr,
-    /* m_slots */ nullptr,
-    /* m_traverse */ nullptr,
-    /* m_clear */ nullptr,
-    /* m_free */ nullptr
+    "_native",
+    "ProcessAudioTap native WASAPI backend (WASAPI per-process loopback)",
+    -1,
+    nullptr,  // no global module-level functions for now
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr
 };
 
-PyMODINIT_FUNC PyInit_wasapi_process_loopback_native(void) {
+// Module initializer
+PyMODINIT_FUNC PyInit__native(void)
+{
     PyObject* m;
 
+    // Prepare Python type object
     if (PyType_Ready(&ProcessLoopbackType) < 0) {
         return nullptr;
     }
 
+    // Create module object
     m = PyModule_Create(&wasapi_module);
     if (m == nullptr) {
         return nullptr;
     }
 
+    // Add ProcessLoopback type to module
     Py_INCREF(&ProcessLoopbackType);
     if (PyModule_AddObject(m, "ProcessLoopback", (PyObject*)&ProcessLoopbackType) < 0) {
         Py_DECREF(&ProcessLoopbackType);
