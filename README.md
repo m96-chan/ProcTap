@@ -48,11 +48,13 @@ Ideal for VRChat, games, DAWs, browsers, and AI audio analysis pipelines.
 
 ## 📦 Installation
 
-**From PyPI** (coming soon):
+**From PyPI**:
 
 ```bash
-pip install proctap
+pip install proc-tap
 ```
+
+📚 **[Read the Full Documentation](https://m96-chan.github.io/ProcTap/)** for detailed guides and API reference.
 
 **From TestPyPI** (for testing pre-releases):
 

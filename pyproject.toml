@@ -41,6 +41,10 @@ dev = [
     "mypy",
     "types-setuptools"
 ]
+docs = [
+    "mkdocs-material>=9.0.0",
+    "mkdocstrings[python]>=0.24.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
