@@ -10,7 +10,12 @@ on:
 
 jobs:
   build-wheels:
-    runs-on: windows-latest   # C++ extension requires Windows
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository at specified tag
@@ -21,33 +26,63 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
+
+      # Linux: Install PulseAudio dependencies
+      - name: Install PulseAudio (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio-utils
+
+      # macOS: Verify Swift toolchain
+      - name: Verify Swift (macOS)
+        if: runner.os == 'macOS'
+        run: swift --version
 
       - name: Install build backend
         run: |
           python -m pip install --upgrade pip
           pip install build
 
-      - name: Build sdist and wheel
+      - name: Build wheel
         run: |
-          python -m build
+          python -m build --wheel
 
-      - name: Upload artifacts
+      # Only build sdist once (on Linux with Python 3.11)
+      - name: Build sdist
+        if: runner.os == 'Linux' && matrix.python-version == '3.11'
+        run: |
+          python -m build --sdist
+
+      - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+      - name: Upload sdist artifact
+        if: runner.os == 'Linux' && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
 
   publish-pypi:
     needs: build-wheels
     runs-on: ubuntu-latest   # pypa/gh-action-pypi-publish requires Linux
 
     steps:
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist
-          path: dist/
+          path: artifacts/
+
+      - name: Merge artifacts into dist directory
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name "*.whl" -o -name "*.tar.gz" \) -exec cp {} dist/ \;
+          ls -lh dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4

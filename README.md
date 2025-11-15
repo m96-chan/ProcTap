@@ -299,7 +299,7 @@ finally:
 - Install system package: `sudo apt-get install pulseaudio-utils` (provides `parec` command)
 - Python dependency `pulsectl` is automatically installed with `pip install proc-tap`
 - The target process must be actively playing audio
-- See [examples/linux_pulse_basic.py](examples/linux_pulse_basic.py) for a complete example
+- See [examples/linux_basic.py](examples/linux_basic.py) for a complete example
 
 ---
 
@@ -337,7 +337,7 @@ finally:
 - Swift CLI helper binary (proctap-macos) - automatically built during installation if Swift toolchain available
 - Audio capture permission - macOS will prompt on first run
 - The target process must be actively playing audio
-- See [examples/macos_coreaudio_basic.py](examples/macos_coreaudio_basic.py) for a complete example
+- See [examples/macos_basic.py](examples/macos_basic.py) for a complete example
 
 **Building the Swift helper manually:**
 ```bash

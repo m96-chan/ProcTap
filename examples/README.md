@@ -4,72 +4,54 @@ This directory provides usage examples for the ProcTap library.
 
 ## Overview
 
-This directory contains practical examples of per-process audio capture using ProcTap. Each sample demonstrates how to use the library's features in real-world scenarios.
+This directory contains practical examples of per-process audio capture using ProcTap across different platforms. Each sample demonstrates platform-specific usage patterns.
 
-## System Requirements
+## Available Examples
 
+- **[windows_basic.py](windows_basic.py)**: Windows per-process audio capture example
+- **[linux_basic.py](linux_basic.py)**: Linux PulseAudio capture example (experimental)
+- **[macos_basic.py](macos_basic.py)**: macOS Core Audio Process Tap example (experimental)
+
+## Platform Requirements
+
+### Windows
 - **OS**: Windows 10 (20H1 or later) or Windows 11
 - **Python**: 3.10 or higher
 - **Permissions**: No administrator privileges required
 
-## Required Libraries
+### Linux
+- **OS**: Linux with PulseAudio or PipeWire
+- **Python**: 3.10 or higher
+- **System Package**: `pulseaudio-utils` (provides `parec` command)
 
-### Required
+### macOS
+- **OS**: macOS 14.4 (Sonoma) or later
+- **Python**: 3.10 or higher
+- **Swift Helper**: Built automatically during installation
 
-1. **ProcTap** (this package)
-   - Core functionality for per-process audio capture
-   - Must be built from source
+## Installation
 
-2. **psutil**
-   - Used to find PID from process name
-   - Install with `pip install psutil`
-
-### Standard Library (No Installation Required)
-
-- `wave`: Creating and writing WAV files
-- `argparse`: Command-line argument parsing
-- `sys`: System operations
-
-## Installation Steps
-
-### 1. Build and Install ProcTap
-
-**Option A: From Source** (Recommended for development)
-
-Run from the repository root directory:
+### Install ProcTap
 
 ```bash
-# Install in development mode (builds C++ extension)
+# From PyPI (recommended)
+pip install proc-tap
+
+# From source (for development)
+git clone https://github.com/m96-chan/ProcTap
+cd ProcTap
 pip install -e .
-
-# Or install with development dependencies
-pip install -e ".[dev]"
 ```
 
-**Option B: From TestPyPI** (For testing pre-releases)
-
-```bash
-pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ proctap
-```
-
-**Note**: Building from source requires Visual Studio Build Tools and Windows SDK.
-
-### 2. Install psutil
+### Optional: Install psutil (for process name lookup)
 
 ```bash
 pip install psutil
 ```
 
-### 3. Verify Installation
-
-```bash
-python -c "from proctap import ProcTap; print('Installation successful!')"
-python -c "import psutil; print('psutil installation successful!')"
-```
-
 ---
 
-## Example: record_proc_to_wav.py
+## Example: windows_basic.py
 
 ### Description
 
@@ -87,7 +69,7 @@ This example captures audio from a specific process and saves it to a WAV file. 
 #### Basic Syntax
 
 ```bash
-python examples/record_proc_to_wav.py [--pid PID | --name PROCESS_NAME] [--output OUTPUT_FILE]
+python examples/windows_basic.py [--pid PID | --name PROCESS_NAME] [--output OUTPUT_FILE]
 ```
 
 #### Options
@@ -106,20 +88,20 @@ python examples/record_proc_to_wav.py [--pid PID | --name PROCESS_NAME] [--outpu
 
 ```bash
 # Record audio from VRChat
-python examples/record_proc_to_wav.py --name "VRChat.exe" --output vrchat_audio.wav
+python examples/windows_basic.py --name "VRChat.exe" --output vrchat_audio.wav
 
 # Record audio from Discord (works without .exe extension)
-python examples/record_proc_to_wav.py --name "Discord" --output discord_audio.wav
+python examples/windows_basic.py --name "Discord" --output discord_audio.wav
 
 # Use default output filename (output.wav)
-python examples/record_proc_to_wav.py --name "spotify.exe"
+python examples/windows_basic.py --name "spotify.exe"
 ```
 
 #### 2. Recording by Process ID
 
 ```bash
 # Record from process with PID 1234
-python examples/record_proc_to_wav.py --pid 1234 --output audio.wav
+python examples/windows_basic.py --pid 1234 --output audio.wav
 ```
 
 ### How to Find Process ID
@@ -231,11 +213,11 @@ pip install -e . --force-reinstall --no-deps
 - Record only the desired audio even when multiple applications are playing sound
 - No administrator privileges required
 
-### Limitations
+### Platform Limitations
 
-- **Windows Only**: Does not work on macOS or Linux
-- **Windows 10 20H1 or Later**: Per-process capture requires newer WASAPI features
-- **Python 3.10 or Later**: Uses type hints functionality
+- **Windows**: Requires Windows 10 20H1 or later for per-process WASAPI capture
+- **Linux**: Experimental - currently captures from sink monitor (may include other apps)
+- **macOS**: Experimental - requires macOS 14.4+ for Core Audio Process Tap API
 
 ---
 

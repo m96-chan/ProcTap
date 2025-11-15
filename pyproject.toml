@@ -12,7 +12,7 @@ license = {text = "MIT"}
 authors = [
     {name = "m96-chan", email = "y_harada@technologies.moe"}
 ]
-keywords = ["audio", "capture", "wasapi", "windows", "linux", "pulseaudio", "process", "loopback"]
+keywords = ["audio", "capture", "wasapi", "windows", "linux", "macos", "pulseaudio", "coreaudio", "process", "loopback"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -21,12 +21,15 @@ classifiers = [
     "Operating System :: Microsoft :: Windows :: Windows 10",
     "Operating System :: Microsoft :: Windows :: Windows 11",
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: C++",
+    "Programming Language :: Swift",
     "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]

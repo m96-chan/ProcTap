@@ -47,7 +47,7 @@ body:
       placeholder: |
         - File: README.md, section "Basic Usage"
         - Line 42 in src/proctap/core.py docstring
-        - examples/record_proc_to_wav.py
+        - examples/windows_basic.py
       render: markdown
     validations:
       required: true

@@ -54,14 +54,14 @@ mypy src/
 
 ```bash
 # Windows example
-python examples/record_proc_to_wav.py --pid 12345 --output audio.wav
-python examples/record_proc_to_wav.py --name "VRChat.exe" --output audio.wav
+python examples/windows_basic.py --pid 12345 --output audio.wav
+python examples/windows_basic.py --name "VRChat.exe" --output audio.wav
 
 # Linux example (requires pulseaudio-utils)
-python examples/linux_pulse_basic.py --pid 12345 --duration 5 --output output.wav
+python examples/linux_basic.py --pid 12345 --duration 5 --output output.wav
 
 # macOS example (requires macOS 14.4+, Swift helper)
-python examples/macos_coreaudio_basic.py --pid 12345 --duration 5 --output output.wav
+python examples/macos_basic.py --pid 12345 --duration 5 --output output.wav
 ```
 
 ### Building macOS Swift Helper
@@ -290,8 +290,22 @@ Raw PCM data is returned as `bytes` to user callbacks/iterators.
 
 GitHub Actions workflows in [.github/workflows/](.github/workflows/):
 
-- **[build-wheels.yml](.github/workflows/build-wheels.yml)**: Multi-version wheel builds (Python 3.10-3.13)
-- **[publish-pypi.yml](.github/workflows/publish-pypi.yml)**: Manual PyPI release trigger
-- **[release-testpypi.yml](.github/workflows/release-testpypi.yml)**: TestPyPI releases
+- **[build-wheels.yml](.github/workflows/build-wheels.yml)**: Multi-platform wheel builds
+  - Builds for Windows, Linux, macOS
+  - Python versions: 3.10, 3.11, 3.12, 3.13
+  - Platform-specific setup: PulseAudio (Linux), Swift verification (macOS)
 
-**Note:** Current workflows use Windows runners. Future TODO: Add Linux/macOS runners for platform-specific testing of experimental backends.
+- **[publish-pypi.yml](.github/workflows/publish-pypi.yml)**: PyPI release workflow
+  - Builds wheels for all platforms
+  - Merges artifacts from multiple runners
+  - Manual trigger with git tag input
+
+- **[release-testpypi.yml](.github/workflows/release-testpypi.yml)**: TestPyPI releases
+  - Triggered on version tags (v*.*.*)
+  - Multi-platform wheel generation
+  - Automatic upload to TestPyPI
+
+**Platform-Specific Build Steps:**
+- **Windows**: C++ extension compilation (Visual Studio Build Tools)
+- **Linux**: PulseAudio system package installation
+- **macOS**: Swift CLI helper compilation (SwiftPM)
