@@ -298,7 +298,7 @@ MIT License
 
 ## 👤 Author
 
-**Yusuke Harada (m96-chan)**  
+**m96-chan**  
 Windows Audio / VRChat Tools / Python / C++  
 https://github.com/m96-chan
 
