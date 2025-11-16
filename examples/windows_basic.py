@@ -1,4 +1,4 @@
-from proctap import ProcessAudioTap
+from proctap import ProcessAudioTap, StreamConfig
 import wave
 import argparse
 import psutil
@@ -58,20 +58,29 @@ def main():
         pid = args.pid
         print(f"Using PID: {pid}")
 
+    # Audio format configuration (48kHz stereo)
+    # WASAPI native format (44.1kHz) will be automatically converted to 48kHz
+    config = StreamConfig(
+        sample_rate=48000,
+        channels=2,
+    )
+
     # WAVファイルの設定
     wav = wave.open(args.output, "wb")
-    wav.setnchannels(2)
+    wav.setnchannels(config.channels)
     wav.setsampwidth(2)  # 16bit PCM
-    wav.setframerate(44100)
+    wav.setframerate(config.sample_rate)
 
     def on_data(pcm, frames):
         wav.writeframes(pcm)
 
     print(f"Recording audio from PID {pid} to '{args.output}'")
+    print(f"Format: {config.sample_rate}Hz, {config.channels}ch, 16-bit PCM")
+    print("(WASAPI native 44.1kHz will be automatically converted to 48kHz)")
     print("Press Enter to stop recording...")
 
     try:
-        with ProcessAudioTap(pid, on_data=on_data):
+        with ProcessAudioTap(pid, config=config, on_data=on_data):
             input()
     except KeyboardInterrupt:
         print("\nRecording stopped by user")

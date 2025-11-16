@@ -38,15 +38,19 @@ def get_backend(
         ImportError: If the backend for the current platform cannot be loaded
 
     Note:
-        Windows backend uses fixed format (44100Hz, 2ch, 16-bit) and ignores
-        sample_rate, channels, and sample_width parameters.
+        Windows backend now supports format conversion. The native WASAPI
+        captures at 44100Hz/2ch/16-bit, but will convert to the specified format.
     """
     system = platform.system()
 
     if system == "Windows":
         from .windows import WindowsBackend
-        # Windows backend uses fixed format from C++ extension
-        return WindowsBackend(pid)
+        return WindowsBackend(
+            pid=pid,
+            sample_rate=sample_rate,
+            channels=channels,
+            sample_width=sample_width,
+        )
 
     elif system == "Linux":
         from .linux import LinuxBackend

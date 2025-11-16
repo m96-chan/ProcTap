@@ -107,7 +107,14 @@ backends/__init__.py (Platform Detection)
 **Windows Backend** ([backends/windows.py](src/proctap/backends/windows.py)):
 - Wraps `_native.cpp` C++ extension
 - Per-process audio capture requires `ActivateAudioInterfaceAsync` (Windows 10 20H1+)
-- Fixed audio format: 44.1kHz, 2ch, 16-bit PCM
+- Native WASAPI format: 44.1kHz, 2ch, 16-bit PCM (fixed in C++)
+- **Audio Format Conversion** ([backends/converter.py](src/proctap/backends/converter.py)):
+  - Python-based audio format conversion using scipy
+  - Supports sample rate conversion (resampling)
+  - Supports channel conversion (mono ↔ stereo)
+  - Supports bit depth conversion (8/16/24/32-bit)
+  - Automatically converts WASAPI output to match `StreamConfig`
+  - No conversion overhead if formats already match
 
 **Linux Backend** ([backends/linux.py](src/proctap/backends/linux.py)):
 - 🧪 Experimental - PulseAudio support implemented
@@ -155,13 +162,16 @@ Audio Source (Process-specific)
   - Callback mode: `start(on_data=callback)`
   - Async mode: `async for chunk in tap.iter_chunks()`
   - Uses platform-specific backend via `get_backend()`
-- `StreamConfig`: Audio format configuration (exists for API compatibility but may not affect all backends)
+- `StreamConfig`: Audio format configuration
+  - If `None`, uses native backend format (no conversion)
+  - If specified, backend converts to match the desired format
 
 **[backends/](src/proctap/backends/)** - Platform-specific implementations:
 - `base.py`: `AudioBackend` abstract base class
-- `windows.py`: Windows implementation (wraps `_native.cpp`)
+- `windows.py`: Windows implementation (wraps `_native.cpp` + format conversion)
 - `linux.py`: Linux PulseAudio implementation (experimental)
 - `macos.py`: macOS Core Audio Process Tap implementation (experimental)
+- `converter.py`: Audio format converter (sample rate, channels, bit depth)
 
 **[_native.cpp](src/proctap/_native.cpp)** - Windows C++ Extension:
 - `ProcessLoopback` class: WASAPI capture implementation
@@ -205,15 +215,19 @@ The build system ([setup.py](setup.py)) automatically detects the platform and b
 ## Python Dependencies
 
 **Runtime:**
-- **Windows**: No Python dependencies (uses native C++ extension)
+- **Core**:
+  - `numpy>=1.20.0` - Array operations for audio processing
+  - `scipy>=1.7.0` - Signal processing (fallback resampling)
+  - `samplerate>=0.1.0` - Professional-grade audio resampling (libsamplerate, **included by default**)
+- **Windows**: Uses native C++ extension + Python format conversion
 - **Linux**: `pulsectl>=23.5.0` (automatically installed via environment markers in pyproject.toml)
-- **macOS**: No Python dependencies (uses Swift CLI helper binary)
+- **macOS**: No additional dependencies (uses Swift CLI helper binary)
 
 **System Dependencies (Linux only):**
 - `parec` command from `pulseaudio-utils` package
 - PulseAudio or PipeWire with pulseaudio-compat
 
-**Optional:**
+**Examples:**
 - `psutil`: Used in examples for process name → PID resolution
 
 **Development:**
@@ -234,7 +248,37 @@ The Windows native extension uses a **fixed audio format** hardcoded in [_native
 - **Block Align:** 4 bytes (2 channels × 16 bits / 8)
 - **Byte Rate:** 176,400 bytes/sec
 
-**Note:** The `StreamConfig` class exists in Python but does not affect the Windows backend format. The format is fixed at the C++ level and cannot be changed without recompiling the extension.
+**Format Conversion (New in v0.2.1):**
+
+The `StreamConfig` parameter now controls output format through automatic conversion:
+
+- **Native Format (C++)**: Fixed at 44.1kHz, 2ch, 16-bit PCM (WASAPI requirement)
+- **Output Format (Python)**: Converted to match `StreamConfig` settings
+- **Conversion Features**:
+  - Sample rate conversion (e.g., 44.1kHz → 48kHz)
+  - Channel conversion (stereo ↔ mono)
+  - Bit depth conversion (8/16/24/32-bit)
+  - Automatic bypass when formats match (zero overhead)
+- **Resampling Quality** (automatic priority order):
+  1. **libsamplerate** (default, highest quality)
+     - Professional-grade SRC (Sample Rate Converter)
+     - SINC interpolation with minimal artifacts
+     - **Included by default** in standard installation
+  2. **scipy.signal.resample_poly** (fallback, high quality)
+     - Polyphase filtering
+     - Used if libsamplerate fails or unavailable
+  3. **scipy.signal.resample** (fallback)
+     - FFT-based resampling
+     - Used only if both above methods fail
+- **Usage**:
+  ```python
+  # Use native format (no conversion)
+  tap = ProcessAudioTap(pid, config=None)
+
+  # Convert to 48kHz stereo (uses libsamplerate automatically)
+  config = StreamConfig(sample_rate=48000, channels=2)
+  tap = ProcessAudioTap(pid, config=config)
+  ```
 
 **Linux Backend:**
 
@@ -254,11 +298,16 @@ Raw PCM data is returned as `bytes` to user callbacks/iterators.
 ## Known Issues and TODOs
 
 **Windows Backend:**
-1. **Frame Count Calculation** ([core.py:201](src/proctap/core.py#L201)):
-   - Currently returns `-1` for frame count in callbacks
-   - TODO: Calculate from backend format info
+1. ✅ **Audio Format Conversion** - COMPLETED in v0.2.1
+   - StreamConfig now controls output format via Python-based conversion
+   - WASAPI native format (44.1kHz/2ch/16bit) automatically converted to desired format
+   - See [backends/converter.py](src/proctap/backends/converter.py)
 
-2. **Buffer Size Control** ([core.py:29](src/proctap/core.py#L29)):
+2. **Frame Count Calculation** ([core.py:207](src/proctap/core.py#L207)):
+   - Currently returns `-1` for frame count in callbacks
+   - TODO: Calculate from backend format info (needs to account for conversion)
+
+3. **Buffer Size Control** ([core.py:29](src/proctap/core.py#L29)):
    - `buffer_ms` parameter exists but note indicates limited control
 
 **Linux Backend (Experimental):**
@@ -283,8 +332,9 @@ Raw PCM data is returned as `bytes` to user callbacks/iterators.
 
 **General:**
 1. **Test Coverage:**
-   - No test suite currently in repository (pytest configured but no tests written)
+   - ✅ Audio format converter tests added ([test_converter.py](test_converter.py))
    - TODO: Add platform-specific backend tests
+   - TODO: Add integration tests for ProcessAudioTap with real processes
 
 ## CI/CD Workflows
 

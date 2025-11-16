@@ -50,17 +50,48 @@ class ProcessAudioTap:
         on_data: Optional[AudioCallback] = None,
     ) -> None:
         self._pid = pid
-        self._cfg = config or StreamConfig()
         self._on_data = on_data
 
-        # Get platform-specific backend
-        # Pass config to backend (Windows uses fixed format, Linux uses config)
-        self._backend: AudioBackend = get_backend(
-            pid=pid,
-            sample_rate=self._cfg.sample_rate,
-            channels=self._cfg.channels,
-            sample_width=2,  # 16-bit = 2 bytes
-        )
+        # If config is None, backend will use native format (no conversion)
+        # Otherwise, backend will convert to the specified format
+        if config is None:
+            # Create a temporary backend to get native format
+            temp_backend = get_backend(
+                pid=pid,
+                sample_rate=44100,  # Default values (will be replaced)
+                channels=2,
+                sample_width=2,
+            )
+            native_format = temp_backend.get_format()
+
+            # Create StreamConfig from native format
+            self._cfg = StreamConfig(
+                sample_rate=native_format['sample_rate'],
+                channels=native_format['channels'],
+                frames_per_buffer=int(native_format['sample_rate'] * 0.01),  # 10ms
+            )
+
+            # Re-create backend with native format (no conversion needed)
+            self._backend: AudioBackend = get_backend(
+                pid=pid,
+                sample_rate=self._cfg.sample_rate,
+                channels=self._cfg.channels,
+                sample_width=native_format['bits_per_sample'] // 8,
+            )
+            logger.debug(
+                f"Using native format: {self._cfg.sample_rate}Hz, "
+                f"{self._cfg.channels}ch, {native_format['bits_per_sample']}bit"
+            )
+        else:
+            self._cfg = config
+            # Get platform-specific backend with specified format
+            self._backend: AudioBackend = get_backend(
+                pid=pid,
+                sample_rate=self._cfg.sample_rate,
+                channels=self._cfg.channels,
+                sample_width=2,  # 16-bit = 2 bytes
+            )
+
         logger.debug(f"Using backend: {type(self._backend).__name__}")
 
         self._thread: Optional[threading.Thread] = None

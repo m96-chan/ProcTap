@@ -35,6 +35,9 @@ classifiers = [
 
 # Platform-specific dependencies (automatically installed based on OS)
 dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+    "samplerate>=0.1.0",  # High-quality audio resampling (libsamplerate)
     "pulsectl>=23.5.0; sys_platform == 'linux'",
 ]
 
@@ -55,6 +58,11 @@ docs = [
 ]
 linux = [
     "pulsectl>=23.5.0",
+]
+# Legacy: samplerate is now included by default
+# This extra is kept for backwards compatibility
+hq-resample = [
+    "samplerate>=0.1.0",
 ]
 
 [tool.setuptools.packages.find]
