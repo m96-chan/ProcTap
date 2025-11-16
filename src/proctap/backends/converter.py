@@ -232,14 +232,22 @@ class AudioConverter:
             audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
         elif sample_format == SampleFormat.INT24:
-            # 24-bit signed PCM (3-byte packed)
+            # 24-bit signed PCM (3-byte packed) - VECTORIZED
             num_samples = len(pcm_bytes) // 3
-            audio_int32 = np.zeros(num_samples, dtype=np.int32)
-            for i in range(num_samples):
-                # Read 3 bytes and sign-extend to 32-bit
-                b = pcm_bytes[i*3:(i+1)*3]
-                val = int.from_bytes(b, byteorder='little', signed=True)
-                audio_int32[i] = val
+            # Convert bytes to uint8 array and reshape to (num_samples, 3)
+            data = np.frombuffer(pcm_bytes, dtype=np.uint8).reshape(num_samples, 3)
+            # Combine 3 bytes into int32 with sign extension
+            # Little-endian: byte0 | byte1<<8 | byte2<<16
+            audio_int32 = (data[:, 0].astype(np.int32) |
+                          (data[:, 1].astype(np.int32) << 8) |
+                          (data[:, 2].astype(np.int32) << 16))
+            # Sign-extend from 24-bit to 32-bit
+            # If bit 23 is set (negative), set upper 8 bits to 1 (0xFF000000)
+            # Use bitwise operations with proper numpy int32 handling
+            sign_bit = (audio_int32 & 0x800000) != 0
+            # Create sign extension mask as int32
+            sign_ext = np.where(sign_bit, np.int32(-16777216), np.int32(0))  # -16777216 = 0xFF000000 as signed int32
+            audio_int32 = audio_int32 | sign_ext
             audio = audio_int32.astype(np.float32) / 8388608.0  # 2^23
 
         elif sample_format == SampleFormat.INT24_32:
@@ -296,13 +304,15 @@ class AudioConverter:
             return audio_int.tobytes()
 
         elif sample_format == SampleFormat.INT24:
-            # 24-bit signed PCM (3-byte packed)
+            # 24-bit signed PCM (3-byte packed) - VECTORIZED
             audio_int = (audio * 8388607.0).astype(np.int32)
-            # Convert to 3-byte representation
-            pcm_bytes = bytearray()
-            for val in audio_int:
-                pcm_bytes.extend(val.to_bytes(3, byteorder='little', signed=True))
-            return bytes(pcm_bytes)
+            # Extract 3 bytes from each int32 (little-endian)
+            num_samples = len(audio_int)
+            pcm_bytes = np.zeros(num_samples * 3, dtype=np.uint8)
+            pcm_bytes[0::3] = audio_int & 0xFF           # byte 0
+            pcm_bytes[1::3] = (audio_int >> 8) & 0xFF    # byte 1
+            pcm_bytes[2::3] = (audio_int >> 16) & 0xFF   # byte 2
+            return pcm_bytes.tobytes()
 
         elif sample_format == SampleFormat.INT24_32:
             # 24-bit in 32-bit container (upper 24 bits)
@@ -354,8 +364,7 @@ class AudioConverter:
             # Duplicate mono channel to all destination channels
             return np.tile(audio, (1, dst_ch))
 
-        # General case: map src channels to dst channels
-        # Simple strategy: copy/average as needed
+        # General case: map src channels to dst channels - OPTIMIZED
         result = np.zeros((num_frames, dst_ch), dtype=np.float32)
 
         if dst_ch < src_ch:
@@ -365,11 +374,12 @@ class AudioConverter:
                 # Average remaining channels into the last channel
                 result[:, -1] = audio[:, dst_ch:].mean(axis=1)
         else:
-            # Upmixing: copy src channels, duplicate last channel to fill
+            # Upmixing: copy src channels, duplicate last channel to fill - VECTORIZED
             result[:, :src_ch] = audio
-            # Fill remaining channels by duplicating the last source channel
-            for i in range(src_ch, dst_ch):
-                result[:, i] = audio[:, -1]
+            # Fill remaining channels by repeating the last source channel
+            if dst_ch > src_ch:
+                # Use broadcasting to duplicate the last channel
+                result[:, src_ch:] = audio[:, -1:].repeat(dst_ch - src_ch, axis=1)
 
         return result
 
@@ -406,7 +416,7 @@ class AudioConverter:
                 logger.warning(f"libsamplerate failed, falling back to scipy: {e}")
                 # Fall through to scipy method
 
-        # Method 2: Use scipy polyphase filtering (good quality, fast)
+        # Method 2: Use scipy polyphase filtering (good quality, fast) - OPTIMIZED
         try:
             from math import gcd
             ratio_gcd = gcd(src_rate, dst_rate)
@@ -419,12 +429,18 @@ class AudioConverter:
                 # Mono
                 return signal.resample_poly(audio, up, down).astype(np.float32)
             else:
-                # Stereo: resample each channel separately
+                # Multi-channel: process along axis=0 (time axis), vectorized per-channel
+                # Note: resample_poly doesn't support multi-channel directly, so we still need a loop
+                # but we optimize by pre-allocating and avoiding redundant calculations
                 num_samples = audio.shape[0]
                 new_num_samples = int(num_samples * ratio)
-                resampled = np.zeros((new_num_samples, audio.shape[1]), dtype=np.float32)
-                for ch in range(audio.shape[1]):
-                    resampled[:, ch] = signal.resample_poly(audio[:, ch], up, down).astype(np.float32)
+                num_channels = audio.shape[1]
+                resampled = np.empty((new_num_samples, num_channels), dtype=np.float32)
+
+                # Process all channels (optimized with pre-allocation)
+                for ch in range(num_channels):
+                    resampled[:, ch] = signal.resample_poly(audio[:, ch], up, down)
+
                 return resampled
         except Exception as e:
             logger.warning(f"scipy.resample_poly failed, falling back to FFT method: {e}")
