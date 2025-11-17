@@ -64,6 +64,11 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
+# Note: pkg_resources deprecation warning from ctranslate2
+# This is a known upstream issue in ctranslate2 4.6.1 that will be fixed in a future release.
+# See: https://github.com/SYSTRAN/faster-whisper/issues/1360
+# The warning does not affect functionality and can be safely ignored for now.
+
 try:
     from proctap import ProcessAudioCapture, StreamConfig
     from proctap.contrib.filters import EnergyVAD
@@ -490,5 +495,10 @@ def main() -> int:
         return 1
 
 
+def _cli_entry_point() -> int:
+    """Entry point for CLI execution to avoid sys.modules RuntimeWarning."""
+    return main()
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(_cli_entry_point())

@@ -73,6 +73,24 @@ python examples/linux_basic.py --pid 12345 --duration 5 --output output.wav
 python examples/macos_basic.py --pid 12345 --duration 5 --output output.wav
 ```
 
+### CLI Usage (Pipe to FFmpeg)
+
+The package installs a `proctap` command for direct use:
+
+```bash
+# Direct command (recommended)
+proctap --pid 12345 --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
+
+# Or using python -m (alternative)
+python -m proctap --pid 12345 --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
+
+# Using process name instead of PID
+proctap --name "VRChat.exe" --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
+
+# Custom sample rate and mono output
+proctap --pid 12345 --sample-rate 44100 --channels 1 --stdout | ffmpeg -f s16le -ar 44100 -ac 1 -i pipe:0 output.wav
+```
+
 ### Building macOS Swift Helper
 
 ```bash

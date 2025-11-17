@@ -1,18 +1,17 @@
 """
 Discord AudioSource implementation for proctap.
 
-Streams process audio to Discord voice channels with automatic format conversion
-and resampling to Discord's required format (48kHz, 16-bit PCM, stereo).
+Streams process audio to Discord voice channels using StreamConfig for
+automatic format conversion to Discord's required format (48kHz, 16-bit PCM, stereo).
 """
 
 from __future__ import annotations
 
 import logging
-import struct
 import threading
 import time
 from collections import deque
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
 
@@ -24,7 +23,7 @@ except ImportError as e:
         "Install with: pip install discord.py"
     ) from e
 
-from ..core import ProcessAudioCapture
+from ..core import ProcessAudioCapture, StreamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +40,8 @@ class ProcessAudioSource(discord.AudioSource):
     """
     Discord AudioSource that captures audio from a specific process.
 
-    This class streams audio from a target process to Discord voice channels,
-    automatically handling format detection, conversion, and resampling.
+    This class streams audio from a target process to Discord voice channels.
+    Uses StreamConfig for automatic format conversion to Discord's requirements.
 
     Args:
         pid: Process ID to capture audio from
@@ -52,7 +51,7 @@ class ProcessAudioSource(discord.AudioSource):
     Example:
         ```python
         import discord
-        from processaudiotap.contrib import ProcessAudioSource
+        from proctap.contrib import ProcessAudioSource
 
         # In your Discord bot
         voice_client = await channel.connect()
@@ -61,8 +60,7 @@ class ProcessAudioSource(discord.AudioSource):
         ```
 
     Note:
-        - Automatically resamples from native 44.1kHz to Discord's 48kHz
-        - Handles both 32-bit float and 16-bit PCM input formats
+        - StreamConfig automatically converts to Discord format (48kHz, stereo, 16-bit)
         - Runs capture in a separate thread for minimal latency
     """
 
@@ -85,11 +83,6 @@ class ProcessAudioSource(discord.AudioSource):
         self._queue_lock = threading.Lock()
         self._buffer = bytearray()
 
-        # Format detection
-        self._source_format: Optional[dict[str, int]] = None
-        self._is_float32 = False
-        self._format_detected = False
-
         # Statistics
         self._frames_dropped = 0
         self._frames_served = 0
@@ -104,13 +97,16 @@ class ProcessAudioSource(discord.AudioSource):
 
         logger.info(f"Starting audio capture for PID {self.pid}")
 
-        # Create ProcessAudioCapture
-        self._tap = ProcessAudioCapture(pid=self.pid)
+        # Create ProcessAudioCapture with Discord format
+        config = StreamConfig(
+            sample_rate=DISCORD_SAMPLE_RATE,
+            channels=DISCORD_CHANNELS,
+            sample_width=DISCORD_SAMPLE_SIZE
+        )
+        self._tap = ProcessAudioCapture(pid=self.pid, config=config)
         self._tap.start()
 
-        # Get source format
-        self._source_format = self._tap.get_format()
-        logger.info(f"Source format: {self._source_format}")
+        logger.info(f"Discord format configured: {DISCORD_SAMPLE_RATE}Hz, {DISCORD_CHANNELS}ch, {DISCORD_SAMPLE_SIZE*8}bit")
 
         # Start capture thread
         self._stop_event.clear()
@@ -150,7 +146,7 @@ class ProcessAudioSource(discord.AudioSource):
     def _capture_loop(self) -> None:
         """
         Capture loop running in separate thread.
-        Continuously reads audio from ProcessAudioCapture and queues converted frames.
+        Reads pre-converted audio from ProcessAudioCapture and applies gain.
         """
         logger.debug("Capture loop started")
 
@@ -164,20 +160,17 @@ class ProcessAudioSource(discord.AudioSource):
                 if chunk is None or len(chunk) == 0:
                     continue
 
-                # Detect format on first chunk
-                if not self._format_detected:
-                    self._detect_format(chunk)
+                # Apply gain if needed
+                if self.gain != 1.0:
+                    chunk = self._apply_gain(chunk)
 
-                # Convert and resample audio
-                converted = self._convert_audio(chunk)
-
-                if converted:
-                    with self._queue_lock:
-                        try:
-                            self._audio_queue.append(converted)
-                        except IndexError:
-                            # Queue full, frame dropped
-                            self._frames_dropped += 1
+                # Queue the audio chunk
+                with self._queue_lock:
+                    try:
+                        self._audio_queue.append(chunk)
+                    except IndexError:
+                        # Queue full, frame dropped
+                        self._frames_dropped += 1
 
             except Exception:
                 logger.exception("Error in capture loop")
@@ -185,138 +178,30 @@ class ProcessAudioSource(discord.AudioSource):
 
         logger.debug("Capture loop ended")
 
-    def _detect_format(self, chunk: bytes) -> None:
+    def _apply_gain(self, chunk: bytes) -> bytes:
         """
-        Detect if audio data is 32-bit float or 16-bit PCM.
-
-        WASAPI may return 32-bit float despite requesting 16-bit PCM.
-        """
-        if self._format_detected:
-            return
-
-        if len(chunk) < 8:
-            return  # Not enough data to detect
-
-        # Try to interpret as 32-bit float
-        try:
-            sample_count = len(chunk) // 4
-            floats = struct.unpack(f"{sample_count}f", chunk[:sample_count * 4])
-
-            # Check if values are in typical float range [-1.0, 1.0]
-            max_abs = max(abs(f) for f in floats[:min(100, len(floats))])
-
-            if 0.0 < max_abs <= 2.0:  # Likely float32
-                self._is_float32 = True
-                logger.info("Detected 32-bit float PCM format")
-            else:
-                self._is_float32 = False
-                logger.info("Detected 16-bit PCM format")
-
-        except struct.error:
-            self._is_float32 = False
-            logger.info("Defaulting to 16-bit PCM format")
-
-        self._format_detected = True
-
-    def _convert_audio(self, chunk: bytes) -> Optional[bytes]:
-        """
-        Convert audio to Discord format (48kHz, 16-bit PCM, stereo).
+        Apply gain to 16-bit PCM audio data.
 
         Args:
-            chunk: Raw audio data from ProcessAudioCapture
+            chunk: Raw 16-bit PCM audio data
 
         Returns:
-            Converted audio data, or None if conversion failed
+            Audio data with gain applied
         """
-        if not self._source_format:
-            return None
-
         try:
-            # Parse audio data
-            if self._is_float32:
-                # 32-bit float PCM
-                sample_count = len(chunk) // 4
-                audio_data = np.frombuffer(chunk, dtype=np.float32, count=sample_count)
+            # Parse as 16-bit PCM (already converted by StreamConfig)
+            audio_data = np.frombuffer(chunk, dtype=np.int16)
 
-                # Check for NaN/Inf
-                if np.any(~np.isfinite(audio_data)):
-                    logger.warning("NaN/Inf detected in audio data, skipping frame")
-                    return None
+            # Apply gain with clipping
+            audio_data = audio_data.astype(np.float32)
+            audio_data = np.clip(audio_data * self.gain, -32768, 32767)
+            audio_data = audio_data.astype(np.int16)
 
-                # Convert float32 [-1.0, 1.0] to int16
-                audio_data = np.clip(audio_data * 32767.0 * self.gain, -32768, 32767)
-                audio_data = audio_data.astype(np.int16)
-            else:
-                # 16-bit PCM
-                sample_count = len(chunk) // 2
-                audio_data = np.frombuffer(chunk, dtype=np.int16, count=sample_count)
-
-                # Apply gain
-                if self.gain != 1.0:
-                    audio_data = audio_data.astype(np.float32)
-                    audio_data = np.clip(audio_data * self.gain, -32768, 32767)
-                    audio_data = audio_data.astype(np.int16)
-
-            # Reshape to (frames, channels)
-            channels = self._source_format["channels"]
-            frames = len(audio_data) // channels
-
-            if frames == 0:
-                return None
-
-            audio_data = audio_data[:frames * channels].reshape(frames, channels)
-
-            # Handle mono to stereo conversion
-            if channels == 1:
-                audio_data = np.repeat(audio_data, 2, axis=1)
-
-            # Resample if necessary
-            source_rate = self._source_format["sample_rate"]
-            if source_rate != DISCORD_SAMPLE_RATE:
-                audio_data = self._resample(audio_data, source_rate, DISCORD_SAMPLE_RATE)
-
-            # Convert to bytes
-            return audio_data.tobytes()
+            return cast(bytes, audio_data.tobytes())
 
         except Exception:
-            logger.exception("Error converting audio")
-            return None
-
-    def _resample(
-        self,
-        audio: np.ndarray,
-        source_rate: int,
-        target_rate: int
-    ) -> np.ndarray:
-        """
-        Resample audio using linear interpolation.
-
-        Args:
-            audio: Audio data shaped (frames, channels)
-            source_rate: Source sample rate
-            target_rate: Target sample rate
-
-        Returns:
-            Resampled audio data
-        """
-        if source_rate == target_rate:
-            return audio
-
-        # Calculate resampling ratio
-        ratio = target_rate / source_rate
-        source_frames = len(audio)
-        target_frames = int(source_frames * ratio)
-
-        # Linear interpolation for each channel
-        source_indices = np.arange(source_frames)
-        target_indices = np.linspace(0, source_frames - 1, target_frames)
-
-        resampled = np.empty((target_frames, audio.shape[1]), dtype=audio.dtype)
-
-        for ch in range(audio.shape[1]):
-            resampled[:, ch] = np.interp(target_indices, source_indices, audio[:, ch])
-
-        return resampled
+            logger.exception("Error applying gain")
+            return chunk  # Return original on error
 
     def read(self) -> bytes:
         """

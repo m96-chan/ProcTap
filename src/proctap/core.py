@@ -23,6 +23,7 @@ AudioCallback = Callable[[bytes, int], None]  # (pcm_bytes, num_frames)
 class StreamConfig:
     sample_rate: int = 44100   # Hz
     channels: int = 2
+    sample_width: int = 2  # Bytes per sample (2 = 16-bit)
     # NOTE:
     # 現状 backend 側でバッファサイズは制御していないので
     # frames_per_buffer は「論理的なサイズ」として扱うだけ。

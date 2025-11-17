@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import logging
 import struct
-from typing import Optional
+from typing import Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +305,7 @@ class AudioConverter:
         if sample_format == SampleFormat.INT16:
             # 16-bit signed PCM
             audio_int = (audio * 32767.0).astype(np.int16)
-            return audio_int.tobytes()
+            return cast(bytes, audio_int.tobytes())
 
         elif sample_format == SampleFormat.INT24:
             # 24-bit signed PCM (3-byte packed) - OPTIMIZATION 1.3: Fully vectorized
@@ -317,23 +317,23 @@ class AudioConverter:
             pcm_bytes[0::3] = audio_int & 0xFF           # byte 0 (LSB)
             pcm_bytes[1::3] = (audio_int >> 8) & 0xFF    # byte 1
             pcm_bytes[2::3] = (audio_int >> 16) & 0xFF   # byte 2 (MSB)
-            return pcm_bytes.tobytes()
+            return cast(bytes, pcm_bytes.tobytes())
 
         elif sample_format == SampleFormat.INT24_32:
             # 24-bit in 32-bit container (upper 24 bits)
             audio_int24 = (audio * 8388607.0).astype(np.int32)
             # Shift left 8 bits to place in upper 24 bits of 32-bit container
             audio_int32 = (audio_int24 * 256).astype(np.int32)
-            return audio_int32.tobytes()
+            return cast(bytes, audio_int32.tobytes())
 
         elif sample_format == SampleFormat.INT32:
             # 32-bit signed PCM
             audio_int = (audio * 2147483647.0).astype(np.int32)
-            return audio_int.tobytes()
+            return cast(bytes, audio_int.tobytes())
 
         elif sample_format == SampleFormat.FLOAT32:
             # 32-bit IEEE float (already float32, just ensure dtype)
-            return audio.astype(np.float32).tobytes()
+            return cast(bytes, audio.astype(np.float32).tobytes())
 
         else:
             raise ValueError(f"Unsupported sample format: {sample_format}")
