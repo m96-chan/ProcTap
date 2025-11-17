@@ -115,6 +115,7 @@ def _load_pipewire_library() -> ctypes.CDLL:
 
 
 # Attempt to load library (will raise PipeWireError if not available)
+_pw_lib: Optional[ctypes.CDLL]
 try:
     _pw_lib = _load_pipewire_library()
 except PipeWireError as e:
@@ -889,7 +890,7 @@ class PipeWireNodeDiscovery:
         self._registry_hook = spa_hook()
         self._found_nodes: list[tuple[int, str, dict[str, str]]] = []
         self._target_pid: Optional[int] = None
-        self._registry_cb_ref: Optional[ctypes.CFUNCTYPE] = None
+        self._registry_cb_ref: Optional[object] = None  # REGISTRY_GLOBAL_CALLBACK type
 
     def _on_registry_global(
         self,
@@ -911,6 +912,7 @@ class PipeWireNodeDiscovery:
             _version: Version (unused)
             props: Properties dictionary
         """
+        assert _pw_lib is not None, "PipeWire library not loaded"
         try:
             type_str = type_.decode('utf-8') if type_ else ""
 
@@ -1076,8 +1078,8 @@ class PipeWireStreamCapture:
         self._running = False
 
         # Keep references to prevent garbage collection
-        self._process_cb_ref: Optional[ctypes.CFUNCTYPE] = None
-        self._params_buffer: Optional[ctypes.Array] = None
+        self._process_cb_ref: Optional[object] = None  # PROCESS_CALLBACK type
+        self._params_buffer: Optional[ctypes.Array] = None  # type: ignore[type-arg]
 
         # Thread management
         self._thread: Optional[threading.Thread] = None
@@ -1091,6 +1093,8 @@ class PipeWireStreamCapture:
         Args:
             user_data: User data pointer (unused)
         """
+        assert _pw_lib is not None, "PipeWire library not loaded"
+
         if not self._pw._stream:
             return
 

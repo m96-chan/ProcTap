@@ -21,7 +21,7 @@ Requirements:
 
 from __future__ import annotations
 
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 from abc import ABC, abstractmethod
 import logging
 import queue
@@ -182,14 +182,14 @@ class PulseAudioStrategy(LinuxAudioStrategy):
         self._sample_width = sample_width
         self._bits_per_sample = sample_width * 8
 
-        self._pulse = None
-        self._sink_input_index = None
-        self._null_sink_index = None
-        self._null_sink_name = None
-        self._remap_source_index = None
-        self._remap_source_name = None
-        self._loopback_module_index = None
-        self._original_sink_index = None
+        self._pulse: Any = None  # pulsectl.Pulse instance
+        self._sink_input_index: Optional[int] = None
+        self._null_sink_index: Optional[int] = None
+        self._null_sink_name: Optional[str] = None
+        self._remap_source_index: Optional[int] = None
+        self._remap_source_name: Optional[str] = None
+        self._loopback_module_index: Optional[int] = None
+        self._original_sink_index: Optional[int] = None
         self._capture_stream = None
         self._audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=50)  # ~500ms buffer
         self._capture_thread: Optional[threading.Thread] = None
@@ -198,6 +198,7 @@ class PulseAudioStrategy(LinuxAudioStrategy):
         self._chunk_duration_ms = 10  # Configurable chunk duration in milliseconds
 
         # Try to import pulsectl
+        self._pulsectl: Any = None  # pulsectl module
         try:
             import pulsectl
             self._pulsectl = pulsectl
@@ -608,16 +609,16 @@ class PipeWireStrategy(LinuxAudioStrategy):
         self._sample_width = sample_width
         self._bits_per_sample = sample_width * 8
 
-        self._pulse = None  # Using PulseAudio compat layer for control
-        self._sink_input_index = None
-        self._stream_id = None
-        self._null_sink_index = None
-        self._null_sink_name = None
-        self._original_sink_index = None
+        self._pulse: Any = None  # pulsectl.Pulse instance (using PulseAudio compat layer)
+        self._sink_input_index: Optional[int] = None
+        self._stream_id: Optional[str] = None
+        self._null_sink_index: Optional[int] = None
+        self._null_sink_name: Optional[str] = None
+        self._original_sink_index: Optional[int] = None
         self._audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=50)  # ~500ms buffer
         self._capture_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._pulsectl = None
+        self._pulsectl: Any = None  # pulsectl module
         self._chunk_duration_ms = 10  # Configurable chunk duration in milliseconds
 
         # Check if pw-record is available
