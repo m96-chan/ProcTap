@@ -67,11 +67,16 @@ class ProcessAudioCapture:
             )
             native_format = temp_backend.get_format()
 
+            # Extract and validate format values
+            sample_rate = int(native_format['sample_rate'])
+            channels = int(native_format['channels'])
+            bits_per_sample = int(native_format['bits_per_sample'])
+
             # Create StreamConfig from native format
             self._cfg = StreamConfig(
-                sample_rate=native_format['sample_rate'],
-                channels=native_format['channels'],
-                frames_per_buffer=int(native_format['sample_rate'] * 0.01),  # 10ms
+                sample_rate=sample_rate,
+                channels=channels,
+                frames_per_buffer=int(sample_rate * 0.01),  # 10ms
             )
 
             # Re-create backend with native format (no conversion needed)
@@ -79,7 +84,7 @@ class ProcessAudioCapture:
                 pid=pid,
                 sample_rate=self._cfg.sample_rate,
                 channels=self._cfg.channels,
-                sample_width=native_format['bits_per_sample'] // 8,
+                sample_width=bits_per_sample // 8,
             )
             logger.debug(
                 f"Using native format: {self._cfg.sample_rate}Hz, "
@@ -175,7 +180,13 @@ class ProcessAudioCapture:
             - 'channels': Number of channels (e.g., 2 for stereo)
             - 'bits_per_sample': Bits per sample (e.g., 16)
         """
-        return self._backend.get_format()
+        fmt = self._backend.get_format()
+        # Return only int values for basic format info
+        return {
+            'sample_rate': int(fmt['sample_rate']),
+            'channels': int(fmt['channels']),
+            'bits_per_sample': int(fmt['bits_per_sample']),
+        }
 
     def read(self, timeout: float = 1.0) -> Optional[bytes]:
         """

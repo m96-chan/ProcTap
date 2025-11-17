@@ -357,7 +357,8 @@ class AudioConverter:
         # Downmix to mono (average all channels)
         if dst_ch == 1:
             # Return as 1D array for mono (resample expects this)
-            return audio.mean(axis=1)
+            result: np.ndarray = audio.mean(axis=1)
+            return result
 
         # Upmix from mono
         if src_ch == 1:
@@ -406,7 +407,7 @@ class AudioConverter:
             try:
                 # samplerate works with both mono and stereo
                 # Shape: (num_frames,) for mono, (num_frames, channels) for stereo
-                resampled = samplerate.resample(
+                resampled: np.ndarray = samplerate.resample(
                     audio,
                     ratio,
                     converter_type='sinc_best'  # Highest quality mode
