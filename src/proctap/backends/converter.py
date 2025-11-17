@@ -97,9 +97,10 @@ class AudioConverter:
         self.dst_format = dst_format
         self.auto_detect_format = auto_detect_format
 
-        # Format detection state
+        # Format detection state (OPTIMIZATION 1.1: Cache format detection)
         self._format_detected = False
         self._detected_format: Optional[str] = None
+        self._actual_format = src_format  # Cached format to avoid repeated conditionals
 
         # Validate parameters
         if src_width not in (2, 3, 4):
@@ -189,15 +190,18 @@ class AudioConverter:
         if not pcm_bytes:
             return pcm_bytes
 
-        # Auto-detect format on first chunk if enabled
+        # OPTIMIZATION 1.1: Cache format detection result
+        # Auto-detect format on first chunk if enabled (only runs once)
         if self.auto_detect_format and not self._format_detected:
             self._detected_format = self._detect_pcm_format(pcm_bytes)
             self._format_detected = True
             if self._detected_format != self.src_format:
                 logger.info(f"Format changed from {self.src_format} to {self._detected_format}")
+            # Update actual_format to avoid repeated checks
+            self._actual_format = self._detected_format
 
-        # Use detected format if available
-        actual_format = self._detected_format if self._detected_format else self.src_format
+        # Use cached format (avoids conditional check on every call after first)
+        actual_format = self._actual_format
 
         # Step 1: bytes -> numpy array (normalized float32)
         audio = self._bytes_to_float(pcm_bytes, actual_format, self.src_channels)
@@ -232,22 +236,22 @@ class AudioConverter:
             audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
         elif sample_format == SampleFormat.INT24:
-            # 24-bit signed PCM (3-byte packed) - VECTORIZED
+            # 24-bit signed PCM (3-byte packed) - OPTIMIZATION 1.3: Fully vectorized
             num_samples = len(pcm_bytes) // 3
             # Convert bytes to uint8 array and reshape to (num_samples, 3)
             data = np.frombuffer(pcm_bytes, dtype=np.uint8).reshape(num_samples, 3)
-            # Combine 3 bytes into int32 with sign extension
+            # Combine 3 bytes into int32 with sign extension using vectorized operations
             # Little-endian: byte0 | byte1<<8 | byte2<<16
+            # Use view casting for maximum performance
             audio_int32 = (data[:, 0].astype(np.int32) |
                           (data[:, 1].astype(np.int32) << 8) |
                           (data[:, 2].astype(np.int32) << 16))
-            # Sign-extend from 24-bit to 32-bit
-            # If bit 23 is set (negative), set upper 8 bits to 1 (0xFF000000)
-            # Use bitwise operations with proper numpy int32 handling
-            sign_bit = (audio_int32 & 0x800000) != 0
-            # Create sign extension mask as int32
-            sign_ext = np.where(sign_bit, np.int32(-16777216), np.int32(0))  # -16777216 = 0xFF000000 as signed int32
-            audio_int32 = audio_int32 | sign_ext
+            # Sign-extend from 24-bit to 32-bit using vectorized bitwise ops
+            # If bit 23 is set (negative), OR with 0xFF000000 to extend sign
+            sign_bit = audio_int32 & 0x800000
+            # Use -16777216 (signed int32 equivalent of 0xFF000000) to avoid overflow
+            audio_int32 = np.where(sign_bit != 0, audio_int32 | np.int32(-16777216), audio_int32)
+            # Normalize to float32 in [-1.0, 1.0]
             audio = audio_int32.astype(np.float32) / 8388608.0  # 2^23
 
         elif sample_format == SampleFormat.INT24_32:
@@ -304,14 +308,15 @@ class AudioConverter:
             return audio_int.tobytes()
 
         elif sample_format == SampleFormat.INT24:
-            # 24-bit signed PCM (3-byte packed) - VECTORIZED
+            # 24-bit signed PCM (3-byte packed) - OPTIMIZATION 1.3: Fully vectorized
             audio_int = (audio * 8388607.0).astype(np.int32)
-            # Extract 3 bytes from each int32 (little-endian)
+            # Extract 3 bytes from each int32 (little-endian) using vectorized indexing
             num_samples = len(audio_int)
-            pcm_bytes = np.zeros(num_samples * 3, dtype=np.uint8)
-            pcm_bytes[0::3] = audio_int & 0xFF           # byte 0
+            pcm_bytes = np.empty(num_samples * 3, dtype=np.uint8)
+            # Use bitwise operations to extract bytes - fully vectorized
+            pcm_bytes[0::3] = audio_int & 0xFF           # byte 0 (LSB)
             pcm_bytes[1::3] = (audio_int >> 8) & 0xFF    # byte 1
-            pcm_bytes[2::3] = (audio_int >> 16) & 0xFF   # byte 2
+            pcm_bytes[2::3] = (audio_int >> 16) & 0xFF   # byte 2 (MSB)
             return pcm_bytes.tobytes()
 
         elif sample_format == SampleFormat.INT24_32:
@@ -337,6 +342,8 @@ class AudioConverter:
         """
         Convert between different channel counts (1-8 channels).
 
+        OPTIMIZATION 1.2: Fully vectorized channel conversion using numpy broadcasting.
+
         Supports:
         - Upmixing: mono -> stereo/surround (duplicate channels)
         - Downmixing: stereo/surround -> mono (average all channels)
@@ -352,37 +359,39 @@ class AudioConverter:
         if audio.ndim == 1:
             audio = audio.reshape(-1, 1)
 
-        num_frames = audio.shape[0]
-
-        # Downmix to mono (average all channels)
+        # Downmix to mono (average all channels) - VECTORIZED
         if dst_ch == 1:
             # Return as 1D array for mono (resample expects this)
             result: np.ndarray = audio.mean(axis=1)
             return result
 
-        # Upmix from mono
+        # Upmix from mono - VECTORIZED
         if src_ch == 1:
-            # Duplicate mono channel to all destination channels
-            return np.tile(audio, (1, dst_ch))
+            # Use np.broadcast_to for zero-copy view (much faster than tile)
+            # Then copy to ensure writable array
+            result_upmix: np.ndarray = np.broadcast_to(audio, (audio.shape[0], dst_ch)).copy()
+            return result_upmix
 
-        # General case: map src channels to dst channels - OPTIMIZED
-        result = np.zeros((num_frames, dst_ch), dtype=np.float32)
+        # General case: map src channels to dst channels - FULLY VECTORIZED
+        num_frames = audio.shape[0]
 
         if dst_ch < src_ch:
-            # Downmixing: take first dst_ch channels and average the rest
-            result[:, :dst_ch] = audio[:, :dst_ch]
-            if src_ch > dst_ch:
-                # Average remaining channels into the last channel
-                result[:, -1] = audio[:, dst_ch:].mean(axis=1)
+            # Downmixing: take first dst_ch-1 channels, average the rest into last channel
+            # Fully vectorized using slicing and mean
+            result = np.empty((num_frames, dst_ch), dtype=np.float32)
+            result[:, :dst_ch-1] = audio[:, :dst_ch-1]
+            # Average remaining channels (from dst_ch-1 onwards) into the last channel
+            result[:, -1] = audio[:, dst_ch-1:].mean(axis=1)
+            return result
         else:
-            # Upmixing: copy src channels, duplicate last channel to fill - VECTORIZED
+            # Upmixing: copy src channels, then broadcast last channel to remaining channels
+            # Fully vectorized using slicing and broadcasting
+            result = np.empty((num_frames, dst_ch), dtype=np.float32)
             result[:, :src_ch] = audio
-            # Fill remaining channels by repeating the last source channel
-            if dst_ch > src_ch:
-                # Use broadcasting to duplicate the last channel
-                result[:, src_ch:] = audio[:, -1:].repeat(dst_ch - src_ch, axis=1)
-
-        return result
+            # Use broadcasting to fill remaining channels with the last source channel
+            # This is faster than repeat() as it creates a view first
+            result[:, src_ch:] = audio[:, -1:]
+            return result
 
     def _resample(self, audio: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
         """

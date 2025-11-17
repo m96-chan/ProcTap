@@ -5,7 +5,9 @@
       "Bash(move:*)",
       "Bash(python:*)",
       "Bash(./cuda_env/Scripts/python.exe:*)",
-      "Bash(python3.12 -m mypy:*)"
+      "Bash(python3.12 -m mypy:*)",
+      "Bash(python3.12 -m pytest:*)",
+      "Bash(python3.12:*)"
     ],
     "deny": [],
     "ask": []
