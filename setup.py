@@ -92,9 +92,28 @@ elif platform.system() == "Linux":
     print("NOTE: Per-process isolation has limitations on Linux")
 
 elif platform.system() == "Darwin":  # macOS
-    # macOS: Swift CLI helper for Core Audio Process Tap (macOS 14.4+)
+    # macOS: Native C extension + Swift CLI helper fallback
+    ext_modules = [
+        Extension(
+            "proctap._native_macos",
+            sources=["src/proctap/_native_macos.m"],
+            language="c",
+            extra_compile_args=[
+                # Note: NOT using -fobjc-arc due to compatibility issues with CoreAudio constants
+                # Manual memory management is required
+                "-ObjC",
+                "-O2",  # Moderate optimization (O3 can cause issues)
+            ],
+            extra_link_args=[
+                "-framework", "CoreAudio",
+                "-framework", "AudioToolbox",
+                "-framework", "Foundation",
+            ],
+        )
+    ]
     print("Building for macOS with Core Audio Process Tap backend (macOS 14.4+)")
-    print("NOTE: Swift CLI helper will be built if Swift toolchain is available")
+    print("NOTE: Building native C extension for optimal performance")
+    print("NOTE: Swift CLI helper will be built as fallback if Swift toolchain is available")
 
 else:
     print(f"WARNING: Platform '{platform.system()}' is not officially supported")
