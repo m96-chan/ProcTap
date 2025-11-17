@@ -79,6 +79,20 @@ pip install proc-tap
   sudo dnf install pulseaudio-utils
   ```
 
+**Optional: High-Quality Audio Resampling** (30-50% faster for sample rate conversion):
+
+```bash
+pip install proc-tap[hq-resample]
+```
+
+**Compatibility Notes:**
+- ✅ **Python 3.10-3.12**: Works on all platforms
+- ✅ **Linux/macOS + Python 3.13+**: Should work (you can try it!)
+- ⚠️ **Windows + Python 3.13+**: May fail to build (as of 2025-01)
+  - If it fails, the library automatically falls back to scipy's polyphase filtering
+  - Still provides excellent audio quality, just 30-50% slower for resampling
+  - You can still try installing - if it works, great! If not, no harm done.
+
 📚 **[Read the Full Documentation](https://m96-chan.github.io/ProcTap/)** for detailed guides and API reference.
 
 **From TestPyPI** (for testing pre-releases):
