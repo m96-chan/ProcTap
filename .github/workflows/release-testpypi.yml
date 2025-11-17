@@ -82,6 +82,8 @@ jobs:
 
       - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@v1.12.4
+        permissions:
+          id-token: write
         with:
           # user: __token__
           # password: ${{ secrets.TEST_PYPI_API_TOKEN }}
