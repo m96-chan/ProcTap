@@ -9,6 +9,7 @@ start = time.time()
 chunk_size = 4096
 
 print("Reading from stdin...", file=sys.stderr)
+sys.stderr.flush()
 
 try:
     while True:
@@ -21,6 +22,7 @@ try:
             rate = total / elapsed
             print(f"\rReceived: {total:,} bytes | Rate: {rate:,.0f} bytes/sec | Time: {elapsed:.1f}s",
                   end='', file=sys.stderr)
+            sys.stderr.flush()
 except KeyboardInterrupt:
     pass
 
