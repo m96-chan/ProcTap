@@ -102,6 +102,11 @@ Examples:
         action='store_true',
         help="Enable verbose logging (to stderr)"
     )
+    parser.add_argument(
+        '--duration',
+        type=float,
+        help="Capture duration in seconds (optional, runs indefinitely if not specified)"
+    )
 
     args = parser.parse_args()
 
@@ -179,13 +184,22 @@ Examples:
         tap = ProcessAudioCapture(pid, config=config, on_data=on_data)
         tap.start()
 
-        logger.info("Capture started. Press Ctrl+C to stop.")
+        if args.duration:
+            logger.info(f"Capture started. Will stop after {args.duration} seconds.")
+        else:
+            logger.info("Capture started. Press Ctrl+C to stop.")
 
-        # Keep running until signal received or pipe broken
+        # Keep running until signal received, pipe broken, or duration expires
+        import time
+        start_time = time.time()
         while not stop_requested:
             try:
+                # Check duration limit if specified
+                if args.duration and (time.time() - start_time) >= args.duration:
+                    logger.info(f"Duration limit ({args.duration}s) reached, stopping...")
+                    break
+
                 # Sleep in small increments to respond quickly to signals
-                import time
                 time.sleep(0.1)
             except KeyboardInterrupt:
                 break
