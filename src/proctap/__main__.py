@@ -157,12 +157,17 @@ Examples:
     signal.signal(signal.SIGTERM, signal_handler)
 
     # Callback to write PCM to stdout
+    bytes_written = 0
     def on_data(pcm: bytes, frames: int) -> None:
+        nonlocal bytes_written
         try:
             sys.stdout.buffer.write(pcm)
             sys.stdout.buffer.flush()
+            bytes_written += len(pcm)
+            logger.debug(f"Wrote {len(pcm)} bytes to stdout (total: {bytes_written})")
         except BrokenPipeError:
             # Pipe closed (e.g., ffmpeg finished)
+            logger.warning(f"BrokenPipeError: Pipe closed after writing {bytes_written} bytes")
             nonlocal stop_requested
             stop_requested = True
         except Exception as e:
