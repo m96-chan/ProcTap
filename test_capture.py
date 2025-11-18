@@ -14,17 +14,18 @@ def main():
     print(f"Testing capture from PID {args.pid}...", file=sys.stderr)
 
     total_bytes = 0
+
+    def on_data(data, frames):
+        nonlocal total_bytes
+        total_bytes += len(data)
+        print(f"Received {len(data)} bytes (total: {total_bytes})", file=sys.stderr)
+
     try:
-        tap = ProcessAudioCapture(args.pid)
+        tap = ProcessAudioCapture(args.pid, on_data=on_data)
         print(f"Backend: {tap._backend.__class__.__name__}", file=sys.stderr)
         print(f"Platform: {sys.platform}", file=sys.stderr)
 
-        def on_data(data, frames):
-            nonlocal total_bytes
-            total_bytes += len(data)
-            print(f"Received {len(data)} bytes (total: {total_bytes})", file=sys.stderr)
-
-        tap.start(on_data=on_data)
+        tap.start()
 
         import time
         time.sleep(args.duration)
