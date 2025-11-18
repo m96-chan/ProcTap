@@ -2,8 +2,8 @@
 CLI entry point for proctap.
 
 Usage:
-    python -m proctap --pid 12345 --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
-    python -m proctap --name "VRChat.exe" --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
+    python -m proctap --pid 12345 --stdout | ffmpeg -f f32le -ar 48000 -ac 2 -i pipe:0 output.mp3
+    python -m proctap --name "VRChat.exe" --stdout | ffmpeg -f f32le -ar 48000 -ac 2 -i pipe:0 output.mp3
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import sys
 import signal
 import logging
 import platform
+import struct
 from typing import Optional
 
 try:
@@ -20,8 +21,13 @@ try:
 except ImportError:
     psutil = None  # type: ignore
 
-from .core import ProcessAudioCapture, StreamConfig
-from .format import ResamplingQuality
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
+
+from .core import ProcessAudioCapture
+from .format import FIXED_AUDIO_FORMAT
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +66,13 @@ def main() -> int:
         epilog="""
 Examples:
   # Pipe to ffmpeg (MP3) - Direct command
-  proctap --pid 12345 --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
+  proctap --pid 12345 --stdout | ffmpeg -f f32le -ar 48000 -ac 2 -i pipe:0 output.mp3
 
   # Pipe to ffmpeg (FLAC)
-  proctap --name "VRChat.exe" --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.flac
+  proctap --name "VRChat.exe" --stdout | ffmpeg -f f32le -ar 48000 -ac 2 -i pipe:0 output.flac
 
   # Or using python -m (alternative)
-  python -m proctap --pid 12345 --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
+  python -m proctap --pid 12345 --stdout | ffmpeg -f f32le -ar 48000 -ac 2 -i pipe:0 output.mp3
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -85,31 +91,6 @@ Examples:
         '--stdout',
         action='store_true',
         help="Output raw PCM to stdout (for piping to ffmpeg)"
-    )
-    parser.add_argument(
-        '--sample-rate',
-        type=int,
-        default=48000,
-        help="Sample rate in Hz (default: 48000)"
-    )
-    parser.add_argument(
-        '--channels',
-        type=int,
-        default=2,
-        choices=[1, 2],
-        help="Number of channels: 1=mono, 2=stereo (default: 2)"
-    )
-    parser.add_argument(
-        '--native-converter',
-        action='store_true',
-        help="Windows only: use native SIMD converter pipeline (beta)"
-    )
-    parser.add_argument(
-        '--quality',
-        type=str,
-        default='low',
-        choices=['low', 'high'],
-        help="Resampling quality for native converter: low (linear) or high (libsamplerate)"
     )
     parser.add_argument(
         '--verbose',
@@ -139,16 +120,6 @@ Examples:
     if not args.stdout:
         parser.error("--stdout is currently required (other output modes not yet implemented)")
 
-    use_native = bool(args.native_converter)
-    if use_native and platform.system() != "Windows":
-        parser.error("--native-converter option is only available on Windows")
-
-    quality = (
-        ResamplingQuality.HIGH_QUALITY
-        if args.quality == 'high'
-        else ResamplingQuality.LOW_LATENCY
-    )
-
     # Resolve PID
     pid: int
     if args.name:
@@ -165,19 +136,8 @@ Examples:
         pid = args.pid
         logger.info(f"Using PID: {pid}")
 
-    # Configure audio format
-    config = StreamConfig(
-        sample_rate=args.sample_rate,
-        channels=args.channels,
-        resample_quality=quality,
-        use_native_converter=use_native,
-    )
-
-    if use_native:
-        logger.info(f"Native converter enabled (quality={quality.name.lower()})")
-
-    logger.info(f"Audio format: {config.sample_rate}Hz, {config.channels}ch, 16-bit PCM")
-    logger.info(f"FFmpeg format args: -f s16le -ar {config.sample_rate} -ac {config.channels}")
+    logger.info(f"Audio format: {FIXED_AUDIO_FORMAT.sample_rate}Hz, {FIXED_AUDIO_FORMAT.channels}ch, float32")
+    logger.info(f"FFmpeg format args: -f f32le -ar {FIXED_AUDIO_FORMAT.sample_rate} -ac {FIXED_AUDIO_FORMAT.channels}")
 
     # Setup signal handling for graceful shutdown
     stop_requested = False
@@ -210,7 +170,7 @@ Examples:
     # Start capture
     try:
         logger.info("Starting audio capture...")
-        tap = ProcessAudioCapture(pid, config=config, on_data=on_data)
+        tap = ProcessAudioCapture(pid, on_data=on_data)
         tap.start()
 
         if args.duration:

@@ -70,7 +70,7 @@ from typing import Optional
 # The warning does not affect functionality and can be safely ignored for now.
 
 try:
-    from proctap import ProcessAudioCapture, StreamConfig
+    from proctap import ProcessAudioCapture
     from proctap.contrib.filters import EnergyVAD
 except ImportError:
     print("Error: proctap is not installed. Install it with: pip install proc-tap")
@@ -171,16 +171,12 @@ class RealtimeTranscriber:
         self.language = language
         self.use_vad = use_vad
 
-        # Audio format: 16kHz mono (Whisper's native format)
-        self.config = StreamConfig(
-            sample_rate=16000,  # Whisper expects 16kHz
-            channels=1,  # Mono
-        )
-
-        # Audio buffer
+        # Audio will be converted from fixed format (48kHz stereo float32) to Whisper format (16kHz mono)
+        # Audio buffer for converted audio
         self.audio_buffer = bytearray()
         self.buffer_lock = threading.Lock()
-        self.chunk_size_bytes = int(self.config.sample_rate * 2 * chunk_duration)  # 2 bytes per sample
+        # Calculate buffer size for 16kHz mono 16-bit
+        self.chunk_size_bytes = int(16000 * 2 * chunk_duration)  # 2 bytes per sample
 
         # ProcessAudioCapture instance
         self.tap: Optional[ProcessAudioCapture] = None

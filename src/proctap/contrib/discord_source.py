@@ -1,8 +1,8 @@
 """
 Discord AudioSource implementation for proctap.
 
-Streams process audio to Discord voice channels using StreamConfig for
-automatic format conversion to Discord's required format (48kHz, 16-bit PCM, stereo).
+Streams process audio to Discord voice channels. The fixed 48kHz stereo float32 format
+is automatically converted to Discord's required format (48kHz, 16-bit PCM, stereo).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ except ImportError as e:
         "Install with: pip install discord.py"
     ) from e
 
-from ..core import ProcessAudioCapture, StreamConfig
+from ..core import ProcessAudioCapture
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class ProcessAudioSource(discord.AudioSource):
     Discord AudioSource that captures audio from a specific process.
 
     This class streams audio from a target process to Discord voice channels.
-    Uses StreamConfig for automatic format conversion to Discord's requirements.
+    The fixed 48kHz stereo float32 format is automatically converted to Discord's requirements.
 
     Args:
         pid: Process ID to capture audio from
@@ -103,7 +103,7 @@ class ProcessAudioSource(discord.AudioSource):
             channels=DISCORD_CHANNELS,
             sample_width=DISCORD_SAMPLE_SIZE
         )
-        self._tap = ProcessAudioCapture(pid=self.pid, config=config)
+        self._tap = ProcessAudioCapture(pid=self.pid)
         self._tap.start()
 
         logger.info(f"Discord format configured: {DISCORD_SAMPLE_RATE}Hz, {DISCORD_CHANNELS}ch, {DISCORD_SAMPLE_SIZE*8}bit")
