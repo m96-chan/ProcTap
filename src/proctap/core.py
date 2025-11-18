@@ -268,8 +268,9 @@ class ProcessAudioCapture:
                 continue
 
             if not data:
-                # パケットがまだ無いケース。ここで sleep 入れるかは後で調整。
-                logger.debug("No data from backend.read(), continuing")
+                # パケットがまだ無いケース。短時間 sleep してCPU消費を抑える
+                import time
+                time.sleep(0.01)  # 10ms sleep
                 continue
 
             logger.debug(f"Received {len(data)} bytes from backend")

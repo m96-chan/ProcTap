@@ -126,7 +126,9 @@ class WindowsBackend(AudioBackend):
             or empty bytes if no data available
         """
         data = self._native.read()
-        logger.debug(f"Native read: {len(data) if data else 0} bytes")
+        # Debug logging only when data is received (avoid spam)
+        if data:
+            logger.debug(f"Native read: {len(data)} bytes")
 
         # Apply format conversion if needed
         if self._converter and data:
