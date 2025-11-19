@@ -14,7 +14,8 @@
       "Bash(PYTHONPATH=src python3.12 -m pytest:*)",
       "Bash(PYTHONPATH=src python:*)",
       "Bash(taskkill:*)",
-      "Bash(nul)"
+      "Bash(nul)",
+      "Bash(wsl bash:*)"
     ],
     "deny": [],
     "ask": []
