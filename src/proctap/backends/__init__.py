@@ -10,13 +10,15 @@ All backends return audio in standard format: 48kHz/2ch/float32
 from __future__ import annotations
 
 import platform
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .base import AudioBackend
 
+ResampleQuality = Literal['best', 'medium', 'fast']
 
-def get_backend(pid: int) -> "AudioBackend":
+
+def get_backend(pid: int, resample_quality: ResampleQuality = 'best') -> "AudioBackend":
     """
     Get the appropriate audio capture backend for the current platform.
 
@@ -27,6 +29,7 @@ def get_backend(pid: int) -> "AudioBackend":
 
     Args:
         pid: Process ID to capture audio from
+        resample_quality: Resampling quality mode ('best', 'medium', 'fast')
 
     Returns:
         Platform-specific AudioBackend implementation
@@ -39,7 +42,7 @@ def get_backend(pid: int) -> "AudioBackend":
 
     if system == "Windows":
         from .windows import WindowsBackend
-        return WindowsBackend(pid=pid)
+        return WindowsBackend(pid=pid, resample_quality=resample_quality)
 
     elif system == "Linux":
         from .linux import LinuxBackend

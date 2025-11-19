@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Optional, AsyncIterator
+from typing import Callable, Optional, AsyncIterator, Literal
 import threading
 import queue
 import asyncio
@@ -22,6 +22,9 @@ from .backends.base import (
 )
 
 AudioCallback = Callable[[bytes, int], None]  # (pcm_bytes, num_frames)
+
+# Resample quality modes
+ResampleQuality = Literal['best', 'medium', 'fast']
 
 
 class ProcessAudioCapture:
@@ -47,12 +50,25 @@ class ProcessAudioCapture:
         self,
         pid: int,
         on_data: Optional[AudioCallback] = None,
+        resample_quality: ResampleQuality = 'best',
     ) -> None:
+        """
+        Initialize process audio capture.
+
+        Args:
+            pid: Process ID to capture audio from
+            on_data: Optional callback for audio data (callback mode)
+            resample_quality: Resampling quality mode when format conversion is needed
+                - 'best': Highest quality, ~1.3-1.4ms latency (default)
+                - 'medium': Medium quality, ~0.7-0.9ms latency
+                - 'fast': Lowest quality, ~0.3-0.5ms latency
+        """
         self._pid = pid
         self._on_data = on_data
+        self._resample_quality = resample_quality
 
         # Get platform-specific backend (always returns standard format)
-        self._backend: AudioBackend = get_backend(pid=pid)
+        self._backend: AudioBackend = get_backend(pid=pid, resample_quality=resample_quality)
 
         logger.debug(f"Using backend: {type(self._backend).__name__}")
         logger.debug(f"Standard format: {STANDARD_SAMPLE_RATE}Hz, {STANDARD_CHANNELS}ch, {STANDARD_FORMAT}")

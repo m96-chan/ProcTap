@@ -224,6 +224,16 @@ Examples:
         help="Output format: int16 (s16le) or float32 (f32le) (default: int16)"
     )
     parser.add_argument(
+        '--resample-quality',
+        type=str,
+        default='best',
+        choices=['best', 'medium', 'fast'],
+        help="Resampling quality when format conversion is needed (default: best)\n"
+             "  best: Highest quality, ~1.3-1.4ms latency\n"
+             "  medium: Medium quality, ~0.7-0.9ms latency\n"
+             "  fast: Lowest quality, ~0.3-0.5ms latency"
+    )
+    parser.add_argument(
         '--verbose',
         action='store_true',
         help="Enable verbose logging (to stderr)"
@@ -314,7 +324,7 @@ Examples:
     # Start capture
     try:
         logger.info("Starting audio capture...")
-        tap = ProcessAudioCapture(pid, on_data=on_data)
+        tap = ProcessAudioCapture(pid, on_data=on_data, resample_quality=args.resample_quality)  # type: ignore[arg-type]
         tap.start()
 
         logger.info("Capture started. Press Ctrl+C to stop.")

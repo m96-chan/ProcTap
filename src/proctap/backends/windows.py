@@ -38,12 +38,13 @@ class WindowsBackend(AudioBackend):
     - C++ native extension (_native)
     """
 
-    def __init__(self, pid: int) -> None:
+    def __init__(self, pid: int, resample_quality: str = 'best') -> None:
         """
         Initialize Windows backend.
 
         Args:
             pid: Process ID to capture audio from
+            resample_quality: Resampling quality mode ('best', 'medium', 'fast')
 
         Raises:
             ImportError: If the native extension cannot be imported
@@ -86,11 +87,13 @@ class WindowsBackend(AudioBackend):
                 dst_channels=STANDARD_CHANNELS,
                 dst_width=STANDARD_SAMPLE_WIDTH,
                 dst_format=SampleFormat.FLOAT32,
+                resample_quality=resample_quality,  # type: ignore[arg-type]
             )
             logger.info(
                 f"Audio format conversion enabled: "
                 f"{src_rate}Hz/{src_channels}ch/{src_format} -> "
-                f"{STANDARD_SAMPLE_RATE}Hz/{STANDARD_CHANNELS}ch/float32"
+                f"{STANDARD_SAMPLE_RATE}Hz/{STANDARD_CHANNELS}ch/float32 "
+                f"(quality={resample_quality})"
             )
 
     def start(self) -> None:

@@ -87,8 +87,13 @@ python -m proctap --pid 12345 --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe
 # Using process name instead of PID
 proctap --name "VRChat.exe" --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
 
-# Custom sample rate and mono output
-proctap --pid 12345 --sample-rate 44100 --channels 1 --stdout | ffmpeg -f s16le -ar 44100 -ac 1 -i pipe:0 output.wav
+# Low-latency mode with fast resampling (for real-time streaming)
+proctap --pid 12345 --resample-quality fast --stdout | ffmpeg -f s16le -ar 48000 -ac 2 -i pipe:0 output.mp3
+
+# Available quality modes:
+# --resample-quality best   (highest quality, ~1.3-1.4ms latency, default)
+# --resample-quality medium (medium quality, ~0.7-0.9ms latency)
+# --resample-quality fast   (lowest quality, ~0.3-0.5ms latency)
 ```
 
 ### Building macOS Swift Helper
@@ -193,9 +198,10 @@ Audio Source (Process-specific)
   - Callback mode: `start(on_data=callback)`
   - Async mode: `async for chunk in tap.iter_chunks()`
   - Uses platform-specific backend via `get_backend()`
-- `StreamConfig`: Audio format configuration
-  - If `None`, uses native backend format (no conversion)
-  - If specified, backend converts to match the desired format
+  - Accepts `resample_quality` parameter for controlling resampling performance:
+    - `'best'`: Highest quality, ~1.3-1.4ms latency (default)
+    - `'medium'`: Medium quality, ~0.7-0.9ms latency
+    - `'fast'`: Lowest quality, ~0.3-0.5ms latency
 
 **[backends/](src/proctap/backends/)** - Platform-specific implementations:
 - `base.py`: `AudioBackend` abstract base class
@@ -254,6 +260,10 @@ The build system ([setup.py](setup.py)) automatically detects the platform and b
     - Install with: `pip install proc-tap[hq-resample]`
     - **Note**: May fail to build on some platforms (Windows with Python 3.13+)
     - Falls back to scipy if not available
+    - Supports three quality modes via `resample_quality` parameter:
+      - `'best'`: Uses `sinc_best` converter (default)
+      - `'medium'`: Uses `sinc_medium` converter
+      - `'fast'`: Uses `sinc_fastest` converter
 - **Windows**: Uses native C++ extension + Python format conversion
 - **Linux**: `pulsectl>=23.5.0` (automatically installed via environment markers in pyproject.toml)
 - **macOS**: No additional dependencies (uses Swift CLI helper binary)
