@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 try:
-    from proctap import ProcessAudioCapture, StreamConfig
+    from proctap import ProcessAudioCapture
 except ImportError:
     print("Error: proctap is not installed. Install it with: pip install proc-tap")
     sys.exit(1)
@@ -142,19 +142,30 @@ def main() -> int:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Prepare WAV file
+    # Prepare WAV file (fixed to 48kHz, stereo, 16-bit)
     wav_file = wave.open(str(output_path), 'wb')
-    wav_file.setnchannels(args.channels)
+    wav_file.setnchannels(2)  # stereo
     wav_file.setsampwidth(2)  # 16-bit PCM
-    wav_file.setframerate(args.sample_rate)
+    wav_file.setframerate(48000)  # 48kHz
 
     frame_count = 0
 
     def on_audio_data(pcm_data: bytes, frames: int) -> None:
-        """Callback function to write audio data to WAV file."""
+        """Callback function to convert float32 to int16 and write to WAV file."""
         nonlocal frame_count
-        wav_file.writeframes(pcm_data)
-        frame_count += len(pcm_data) // (args.channels * 2)
+        
+        # Convert float32 PCM to int16 for WAV compatibility
+        import numpy as np
+        
+        # Convert bytes to float32 array
+        float_samples = np.frombuffer(pcm_data, dtype=np.float32)
+        
+        # Convert to int16 (scale and clip)
+        int16_samples = np.clip(float_samples * 32767, -32768, 32767).astype(np.int16)
+        
+        # Write to WAV file
+        wav_file.writeframes(int16_samples.tobytes())
+        frame_count += len(int16_samples) // 2  # 2 channels
 
     try:
         print("\n" + "=" * 60)
@@ -163,19 +174,12 @@ def main() -> int:
         print(f"Target PID:     {pid}")
         print(f"Output file:    {output_path}")
         print(f"Duration:       {args.duration} seconds")
-        print(f"Sample rate:    {args.sample_rate} Hz")
-        print(f"Channels:       {args.channels}")
+        print(f"Format:         48000Hz, 2ch, float32 -> 16-bit PCM (WAV)")
         print("=" * 60)
 
-        # Create stream configuration
-        config = StreamConfig(
-            sample_rate=args.sample_rate,
-            channels=args.channels,
-        )
-
-        # Create audio capture instance
+        # Create audio capture instance (now uses fixed format)
         print("\nInitializing ProcTap...")
-        tap = ProcessAudioCapture(pid=pid, config=config, on_data=on_audio_data)
+        tap = ProcessAudioCapture(pid=pid, on_data=on_audio_data)
 
         print("Starting audio capture...")
         print("\n⚠️  IMPORTANT: Make sure the target process is actively playing audio!")
@@ -196,7 +200,7 @@ def main() -> int:
         wav_file.close()
 
         # Show results
-        duration = frame_count / args.sample_rate
+        duration = frame_count / 48000  # Fixed sample rate
         file_size = output_path.stat().st_size
 
         print("\n" + "=" * 60)

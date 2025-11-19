@@ -143,7 +143,11 @@ proctap --pid 12345 --sample-rate 44100 --channels 1 --stdout | ffmpeg -f s16le 
 | `--stdout` | Output raw PCM to stdout for piping (required) |
 | `--sample-rate RATE` | Sample rate in Hz (default: 48000) |
 | `--channels {1,2}` | Number of channels: 1=mono, 2=stereo (default: 2) |
+| `--native-converter` | **Windows only:** Enable SIMD native converter pipeline (beta) |
+| `--quality {low,high}` | **Windows only:** Resampling quality for native converter (`low`=linear, `high`=libsamplerate) |
 | `--verbose` | Enable verbose logging to stderr |
+
+> **Windows note:** The native converter still emits s16le PCM on stdout, but moves int16→float32 + resampling into a SIMD-optimized C++ path. `--quality high` requires `libsamplerate`; install the optional extra `pip install proc-tap[hq-resample]` or point `LIBSAMPLERATE_PATH` to the directory containing `libsamplerate-0.dll`.
 
 **Finding Process IDs:**
 
@@ -163,6 +167,16 @@ The CLI outputs raw PCM in s16le (signed 16-bit little-endian) format by default
 - `-ac CHANNELS`: Number of channels (must match `--channels`, default 2)
 - `-i pipe:0`: Read from stdin
 
+## 🚀 Native Converter Benchmark (Windows)
+
+Use the helper script to quickly sanity-check throughput and latency of the SIMD converter:
+
+```bash
+python benchmarks/benchmark_native_converter.py --quality high --seconds 5 --iterations 20
+```
+
+It generates synthetic audio, converts it to the fixed 48kHz/float32 format, and reports realtime factors for both low-latency (linear) and high-quality (libsamplerate) modes. Requires the native extension to be built (Windows only).
+
 ---
 
 ## 🛠 Requirements
@@ -172,6 +186,10 @@ The CLI outputs raw PCM in s16le (signed 16-bit little-endian) format by default
 - Python 3.10+
 - WASAPI support
 - **No admin privileges required**
+- 🧪 **Native SIMD converter (beta, Windows-only)**:
+  - Enable with `--native-converter` (CLI) or `StreamConfig(use_native_converter=True)`
+  - `--quality high` uses libsamplerate (install `pip install proc-tap[hq-resample]` or set `LIBSAMPLERATE_PATH` to `libsamplerate-0.dll`)
+  - Automatically falls back to the Python converter if SIMD extension or libsamplerate is unavailable
 
 **Linux (Fully Supported - v0.3.0+):**
 - Linux with PulseAudio or PipeWire

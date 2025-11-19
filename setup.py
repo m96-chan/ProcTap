@@ -82,9 +82,22 @@ if platform.system() == "Windows":
                 # "Avrt",   # 将来、AVRT 系の API (AvSetMmThreadCharacteristicsW 等) を使うなら追加
                 # "Mmdevapi", # 今は LoadLibrary で動的ロードなので必須ではない
             ],
+        ),
+        Extension(
+            "proctap._audio_converter",
+            sources=["src/proctap/audio_converter_python.cpp"],
+            include_dirs=["src/proctap"],
+            language="c++",
+            extra_compile_args=[
+                "/std:c++20",
+                "/EHsc",
+                "/utf-8",
+                "/arch:AVX2",  # Enable AVX2 instructions (fallback to SSE2 at runtime)
+            ] if sys.platform == 'win32' else [],
         )
     ]
     print("Building with Windows WASAPI backend (C++ extension)")
+    print("Building high-performance audio converter with SIMD support (AVX2/SSE2)")
 
 elif platform.system() == "Linux":
     # Linux: Pure Python backend using PulseAudio (experimental)
