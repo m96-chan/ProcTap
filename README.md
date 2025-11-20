@@ -27,9 +27,9 @@ Ideal for VRChat, games, DAWs, browsers, and AI audio analysis pipelines.
 |----------|--------|---------|-------|
 | **Windows** | ✅ **Fully Supported** | WASAPI (C++ native) | Windows 10/11 (20H1+) |
 | **Linux** | ✅ **Fully Supported** | PipeWire Native / PulseAudio | Per-process isolation, auto-fallback (v0.3.0+) |
-| **macOS** | 🧪 **Experimental** | Core Audio Process Tap | macOS 14.4+ (Sonoma) required |
+| **macOS** | ✅ **Officially Supported** | ScreenCaptureKit | macOS 13+ (Ventura), bundleID-based (v0.4.0+) |
 
-<sub>\* Linux is fully supported with PipeWire/PulseAudio (v0.3.0+). macOS support is experimental (see requirements).</sub>
+<sub>\* Linux is fully supported with PipeWire/PulseAudio (v0.3.0+). macOS is officially supported with ScreenCaptureKit (v0.4.0+).</sub>
 
 </div>
 
@@ -41,12 +41,12 @@ Ideal for VRChat, games, DAWs, browsers, and AI audio analysis pipelines.
   (VRChat, games, browsers, Discord, DAWs, streaming tools, etc.)
 
 - 🌍 **Cross-platform architecture**
-  → Windows (fully supported) | Linux (fully supported, v0.3.0+) | macOS (experimental, 14.4+)
+  → Windows (fully supported) | Linux (fully supported, v0.3.0+) | macOS (officially supported, v0.4.0+)
 
 - ⚡ **Platform-optimized backends**
   → Windows: ActivateAudioInterfaceAsync (modern WASAPI)
   → Linux: PipeWire Native API / PulseAudio (fully supported, v0.3.0+)
-  → macOS: Core Audio Process Tap API (macOS 14.4+)
+  → macOS: ScreenCaptureKit API (macOS 13+, bundleID-based, v0.4.0+)
 
 - 🧵 **Low-latency, thread-safe audio engine**
   → 44.1 kHz / stereo / 16-bit PCM format (Windows)
@@ -189,13 +189,14 @@ The CLI outputs raw PCM in s16le (signed 16-bit little-endian) format by default
 - ✅ **Per-process isolation** using null-sink strategy
 - ✅ **Graceful fallback** chain: Native → PipeWire subprocess → PulseAudio
 
-**macOS (Experimental):**
-- macOS 14.4 (Sonoma) or later
+**macOS (Officially Supported - v0.4.0+):**
+- macOS 13.0 (Ventura) or later (macOS 13+ recommended)
 - Python 3.10+
-- Swift CLI helper binary (proctap-macos)
-- Audio capture permission
-- ⚠️ **EXPERIMENTAL:** Core Audio Process Tap API support implemented
-- ⚠️ **REQUIREMENT:** Requires macOS 14.4+ for Process Tap API
+- Swift helper binary (screencapture-audio)
+- Screen Recording permission (automatically prompted)
+- ✅ **ScreenCaptureKit Backend:** Apple Silicon compatible, no AMFI/SIP hacks needed
+- ✅ **Simple Permissions:** Screen Recording only (no Microphone/TCC hacks)
+- ✅ **Low Latency:** ~10-15ms audio capture
 
 ---
 
@@ -393,7 +394,7 @@ finally:
 
 ---
 
-## 🍎 macOS Example
+## 🍎 macOS Example (v0.4.0+)
 
 ```python
 from proctap import ProcessAudioCapture, StreamConfig
@@ -416,25 +417,27 @@ config = StreamConfig(sample_rate=48000, channels=2)
 try:
     with ProcessAudioCapture(pid, config=config, on_data=on_data):
         print("⚠️  Make sure the process is actively playing audio!")
-        print("⚠️  On first run, macOS will prompt for permission.")
+        print("⚠️  On first run, macOS will prompt for Screen Recording permission.")
         input("Recording... Press Enter to stop.\n")
 finally:
     wav.close()
 ```
 
-**macOS-specific requirements:**
-- macOS 14.4 (Sonoma) or later
-- Swift CLI helper binary (proctap-macos) - automatically built during installation if Swift toolchain available
-- Audio capture permission - macOS will prompt on first run
+**macOS-specific requirements (v0.4.0+):**
+- macOS 13.0 (Ventura) or later
+- Swift helper binary (screencapture-audio) - automatically built during installation
+- Screen Recording permission - macOS will prompt on first run
 - The target process must be actively playing audio
-- See [examples/macos_basic.py](examples/macos_basic.py) for a complete example
+- Works with bundleID-based capture (PID is automatically converted to bundleID)
+- See [examples/macos_screencapture_test.py](examples/macos_screencapture_test.py) for a complete example
 
 **Building the Swift helper manually:**
 ```bash
-cd swift/proctap-macos
+cd src/proctap/swift/screencapture-audio
 swift build -c release
-cp .build/release/proctap-macos ../../src/proctap/bin/
 ```
+
+**Note:** The ScreenCaptureKit backend (v0.4.0+) is recommended over the experimental PyObjC/C extension backends.
 
 ---
 
@@ -456,9 +459,10 @@ pip install -e .
 - System dependencies: `pulseaudio-utils` or `pipewire` with `libpipewire-0.3-dev`
 
 **macOS:**
-- No C++ compiler required (pure Python)
-- Swift toolchain (optional, for building the Swift CLI helper)
-- If Swift is not available, pre-built binary is included in the package
+- Swift toolchain required for building the ScreenCaptureKit helper (v0.4.0+)
+- Xcode Command Line Tools: `xcode-select --install`
+- No C++ compiler required (pure Python backend)
+- Helper binary location: `src/proctap/swift/screencapture-audio/`
 
 ---
 
@@ -475,7 +479,7 @@ Contributions are welcome! We have structured issue templates to help guide your
 **Special Interest:**
 - PRs from WASAPI/C++ experts are especially appreciated
 - **Linux backend improvements** (PulseAudio/PipeWire per-app isolation)
-- **macOS backend testing** (Core Audio Process Tap on macOS 14.4+)
+- **macOS backend testing** (ScreenCaptureKit on macOS 13+)
 - Cross-platform testing and compatibility
 - Performance profiling and optimization
 

@@ -12,7 +12,10 @@
       "Bash(mypy:*)",
       "Bash(swift build:*)",
       "Bash(ffprobe:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(pip install:*)",
+      "Bash(git restore:*)",
+      "Bash(git tag:*)"
     ],
     "deny": [],
     "ask": []
