@@ -119,6 +119,8 @@ setup(
     package_data={
         "proctap": ["bin/screencapture-audio"],  # Include ScreenCaptureKit Swift helper
     },
+    # Install PowerShell wrapper script to Scripts directory on Windows
+    scripts=["src/proctap/scripts/proctap.ps1"] if platform.system() == "Windows" else [],
     cmdclass={
         "build_py": BuildPyCommand,
     },
