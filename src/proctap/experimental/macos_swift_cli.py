@@ -25,7 +25,7 @@ import threading
 import struct
 from pathlib import Path
 
-from .base import AudioBackend
+from .base import AudioBackend  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 

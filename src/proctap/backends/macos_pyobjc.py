@@ -38,7 +38,7 @@ import platform
 import queue
 import threading
 import struct
-import objc
+import objc  # type: ignore[import-untyped]
 import uuid
 import ctypes
 
@@ -47,13 +47,9 @@ from .base import AudioBackend
 logger = logging.getLogger(__name__)
 
 # Import ctypes-based Core Audio bindings for Aggregate Device creation
-try:
-    from . import macos_coreaudio_ctypes as ca_ctypes
-    CTYPES_AVAILABLE = True
-    logger.debug("ctypes Core Audio bindings loaded")
-except ImportError as e:
-    logger.warning(f"ctypes Core Audio bindings not available: {e}")
-    CTYPES_AVAILABLE = False
+# Note: macos_coreaudio_ctypes is not currently in the codebase
+CTYPES_AVAILABLE = False
+ca_ctypes = None  # type: ignore[assignment]
 
 # Check if PyObjC is available
 PYOBJC_AVAILABLE = False
@@ -320,13 +316,14 @@ def get_default_output_device_uid() -> str:
             raise RuntimeError(f"Failed to get device UID: status={status}")
 
         # Convert CFString to Python string
-        from Foundation import NSString
+        from Foundation import NSString  # type: ignore[import-untyped]
         uid_string = NSString.alloc().initWithBytes_length_encoding_(
             uid_data, len(uid_data), 4  # NSUTF8StringEncoding = 4
         )
 
         logger.debug(f"Default output device UID: {uid_string}")
-        return str(uid_string)
+        result_str: str = str(uid_string)
+        return result_str
 
     except Exception as e:
         logger.warning(f"Failed to query default output device, using fallback: {e}")
