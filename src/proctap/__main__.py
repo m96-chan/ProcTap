@@ -15,9 +15,9 @@ import logging
 from typing import Optional
 
 try:
-    import psutil
+    import psutil  # type: ignore[import-untyped]
 except ImportError:
-    psutil = None  # type: ignore
+    psutil = None  # type: ignore[assignment]
 
 from .core import ProcessAudioCapture, StreamConfig
 

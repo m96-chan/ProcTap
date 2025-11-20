@@ -46,7 +46,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           swift --version
-          cd swift/screencapture-audio
+          cd src/proctap/swift/screencapture-audio
           swift build -c release
           ls -la .build/arm64-apple-macosx/release/ || ls -la .build/x86_64-apple-macosx/release/
 

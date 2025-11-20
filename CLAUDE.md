@@ -99,7 +99,7 @@ proctap --pid 12345 --sample-rate 44100 --channels 1 --stdout | ffmpeg -f s16le 
 
 ```bash
 # Build Swift helper binary
-cd swift/screencapture-audio
+cd src/proctap/swift/screencapture-audio
 swift build -c release
 
 # Enable Screen Recording permission
@@ -183,14 +183,14 @@ backends/__init__.py (Platform Detection)
   - Low latency (~10-15ms)
 - **Requirements:**
   - macOS 13.0 (Ventura) or later
-  - Swift helper binary: `cd swift/screencapture-audio && swift build`
+  - Swift helper binary: `cd src/proctap/swift/screencapture-audio && swift build`
   - Screen Recording permission (System Settings → Privacy & Security)
 - **Implementation:**
   - Swift CLI helper (`screencapture-audio`) captures via ScreenCaptureKit
   - Python backend manages subprocess and PCM streaming
   - PID → bundleID translation using `lsappinfo`
   - See [backends/macos_screencapture.py](src/proctap/backends/macos_screencapture.py)
-  - See [swift/screencapture-audio/](swift/screencapture-audio/) for Swift implementation
+  - See [swift/screencapture-audio/](src/proctap/swift/screencapture-audio/) for Swift implementation
 
 **Experimental/Archived Backends**:
 - PyObjC backend: [backends/macos_pyobjc.py](src/proctap/backends/macos_pyobjc.py) - IOProc callback issues

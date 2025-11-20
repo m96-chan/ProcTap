@@ -29,10 +29,10 @@ def find_screencapture_binary() -> Optional[Path]:
 
     Search order:
     1. Bundled binary in package (src/proctap/bin/screencapture-audio) - for pip installs
-    2. Development build: swift/screencapture-audio/.build/arm64-apple-macosx/release/
-    3. Development build: swift/screencapture-audio/.build/arm64-apple-macosx/debug/
-    4. Development build: swift/screencapture-audio/.build/x86_64-apple-macosx/release/ (Intel)
-    5. Development build: swift/screencapture-audio/.build/x86_64-apple-macosx/debug/ (Intel)
+    2. Development build: src/proctap/swift/screencapture-audio/.build/arm64-apple-macosx/release/
+    3. Development build: src/proctap/swift/screencapture-audio/.build/arm64-apple-macosx/debug/
+    4. Development build: src/proctap/swift/screencapture-audio/.build/x86_64-apple-macosx/release/ (Intel)
+    5. Development build: src/proctap/swift/screencapture-audio/.build/x86_64-apple-macosx/debug/ (Intel)
 
     Returns:
         Path to binary if found, None otherwise
@@ -43,15 +43,15 @@ def find_screencapture_binary() -> Optional[Path]:
         log.debug(f"Found bundled screencapture-audio at: {bundled_binary}")
         return bundled_binary
 
-    # Get project root (assuming this file is at src/proctap/backends/)
-    project_root = Path(__file__).parent.parent.parent.parent
+    # Get proctap package directory (assuming this file is at src/proctap/backends/)
+    proctap_dir = Path(__file__).parent.parent
 
     # Check development builds (prioritize release builds for better performance)
     search_paths = [
-        project_root / "swift/screencapture-audio/.build/arm64-apple-macosx/release/screencapture-audio",
-        project_root / "swift/screencapture-audio/.build/arm64-apple-macosx/debug/screencapture-audio",
-        project_root / "swift/screencapture-audio/.build/x86_64-apple-macosx/release/screencapture-audio",
-        project_root / "swift/screencapture-audio/.build/x86_64-apple-macosx/debug/screencapture-audio",
+        proctap_dir / "swift/screencapture-audio/.build/arm64-apple-macosx/release/screencapture-audio",
+        proctap_dir / "swift/screencapture-audio/.build/arm64-apple-macosx/debug/screencapture-audio",
+        proctap_dir / "swift/screencapture-audio/.build/x86_64-apple-macosx/release/screencapture-audio",
+        proctap_dir / "swift/screencapture-audio/.build/x86_64-apple-macosx/debug/screencapture-audio",
     ]
 
     for path in search_paths:
@@ -60,7 +60,7 @@ def find_screencapture_binary() -> Optional[Path]:
             return path
 
     log.error("screencapture-audio binary not found. Please build it first:")
-    log.error("  cd swift/screencapture-audio && swift build")
+    log.error("  cd src/proctap/swift/screencapture-audio && swift build")
     return None
 
 

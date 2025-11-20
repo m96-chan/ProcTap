@@ -35,10 +35,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pulseaudio-utils
 
-      # macOS: Verify Swift toolchain
-      - name: Verify Swift (macOS)
+      # macOS: Build ScreenCaptureKit Swift helper
+      - name: Build Swift helper (macOS)
         if: runner.os == 'macOS'
-        run: swift --version
+        run: |
+          swift --version
+          cd src/proctap/swift/screencapture-audio
+          swift build -c release
+          ls -la .build/arm64-apple-macosx/release/ || ls -la .build/x86_64-apple-macosx/release/
 
       - name: Install build backend
         run: |

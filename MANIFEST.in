@@ -1,6 +1,6 @@
 # Include Swift helper source for build
-recursive-include swift/screencapture-audio *.swift
-include swift/screencapture-audio/Package.swift
+recursive-include src/proctap/swift/screencapture-audio *.swift
+include src/proctap/swift/screencapture-audio/Package.swift
 
 # Include documentation
 include README.md

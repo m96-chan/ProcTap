@@ -105,7 +105,7 @@ def find_pid_by_name(process_name: str) -> int:
         RuntimeError: If process not found or psutil not available
     """
     try:
-        import psutil
+        import psutil  # type: ignore[import-untyped]
     except ImportError:
         raise RuntimeError(
             "psutil is required to find process by name. "

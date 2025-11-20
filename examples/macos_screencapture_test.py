@@ -7,7 +7,7 @@ This example demonstrates bundleID-based audio capture using ScreenCaptureKit.
 Requirements:
 - macOS 13.0 (Ventura) or later
 - Screen Recording permission enabled for Terminal
-- Swift helper binary built: cd swift/screencapture-audio && swift build
+- Swift helper binary built: cd src/proctap/swift/screencapture-audio && swift build
 
 Usage:
     python examples/macos_screencapture_test.py --bundle-id com.apple.Safari --duration 5 --output output.wav
@@ -150,7 +150,7 @@ def main():
     except Exception as e:
         log.error(f"Failed to create capture: {e}")
         log.error("\nTroubleshooting:")
-        log.error("1. Build Swift helper: cd swift/screencapture-audio && swift build")
+        log.error("1. Build Swift helper: cd src/proctap/swift/screencapture-audio && swift build")
         log.error("2. Enable Screen Recording permission:")
         log.error("   System Settings → Privacy & Security → Screen Recording → Enable for Terminal")
         log.error("3. Ensure target application is running and playing audio")

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import native extension
 try:
-    import proctap._native_macos as _native
+    import proctap._native_macos as _native  # type: ignore[import-untyped]
     NATIVE_AVAILABLE = True
 except ImportError:
     NATIVE_AVAILABLE = False

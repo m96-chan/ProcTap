@@ -24,7 +24,7 @@ class BuildPyCommand(build_py):
 
     def build_swift_helper(self):
         """Build the Swift CLI helper for ScreenCaptureKit backend on macOS."""
-        swift_dir = Path("swift/screencapture-audio")
+        swift_dir = Path("src/proctap/swift/screencapture-audio")
         if not swift_dir.exists():
             print("WARNING: Swift helper source directory not found, skipping Swift build")
             print(f"  Expected: {swift_dir}")

@@ -105,7 +105,7 @@ def get_backend(
         raise RuntimeError(
             "No macOS backend available.\n"
             "Option 1 (Recommended): Build ScreenCaptureKit backend:\n"
-            "  cd swift/screencapture-audio && swift build\n"
+            "  cd src/proctap/swift/screencapture-audio && swift build\n"
             "  Requires: macOS 13+ (Ventura), Screen Recording permission\n"
             "Option 2 (Fallback): Install PyObjC:\n"
             "  pip install pyobjc-core pyobjc-framework-CoreAudio\n"

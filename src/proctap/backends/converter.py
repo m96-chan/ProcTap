@@ -17,7 +17,7 @@ from typing import Optional, cast
 logger = logging.getLogger(__name__)
 
 try:
-    from scipy import signal
+    from scipy import signal  # type: ignore[import-untyped]
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -437,7 +437,8 @@ class AudioConverter:
 
             if audio.ndim == 1:
                 # Mono
-                return signal.resample_poly(audio, up, down).astype(np.float32)
+                result_mono: np.ndarray = signal.resample_poly(audio, up, down).astype(np.float32)  # type: ignore[no-any-return]
+                return result_mono
             else:
                 # Multi-channel: process along axis=0 (time axis), vectorized per-channel
                 # Note: resample_poly doesn't support multi-channel directly, so we still need a loop
@@ -461,7 +462,8 @@ class AudioConverter:
         new_num_samples = int(num_samples * ratio)
 
         if audio.ndim == 1:
-            return signal.resample(audio, new_num_samples).astype(np.float32)
+            result_fft: np.ndarray = signal.resample(audio, new_num_samples).astype(np.float32)  # type: ignore[no-any-return]
+            return result_fft
         else:
             resampled = np.zeros((new_num_samples, audio.shape[1]), dtype=np.float32)
             for ch in range(audio.shape[1]):
