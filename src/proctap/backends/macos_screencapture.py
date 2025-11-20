@@ -8,6 +8,8 @@ Requirements:
 - macOS 13.0 (Ventura) or later
 - Screen Recording permission (TCC)
 - Swift helper binary (screencapture-audio)
+
+IMPORTANT: Always returns audio in standard format (48kHz/2ch/float32)
 """
 
 import subprocess
@@ -16,9 +18,15 @@ import threading
 import logging
 from pathlib import Path
 from typing import Optional, Callable
-import struct
 
-from .base import AudioBackend
+from .base import (
+    AudioBackend,
+    STANDARD_SAMPLE_RATE,
+    STANDARD_CHANNELS,
+    STANDARD_FORMAT,
+    STANDARD_SAMPLE_WIDTH,
+    STANDARD_DTYPE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -96,23 +104,27 @@ class ScreenCaptureBackend(AudioBackend):
     Captures audio from applications by bundleID instead of PID.
     This is more stable and works on Apple Silicon without AMFI/SIP hacks.
 
+    This backend always returns audio in the standard format:
+    - 48000 Hz
+    - 2 channels (stereo)
+    - float32 (IEEE 754, normalized to [-1.0, 1.0])
+
     Note: bundleID is inferred from PID at initialization time.
     """
 
-    def __init__(self, pid: int, sample_rate: int = 48000, channels: int = 2, sample_width: int = 2):
+    def __init__(self, pid: int, resample_quality: str = 'best') -> None:
         """
         Initialize ScreenCaptureKit backend.
 
         Args:
             pid: Process ID (used to find bundleID)
-            sample_rate: Audio sample rate in Hz (default: 48000)
-            channels: Number of audio channels (default: 2)
-            sample_width: Bytes per sample (2 = 16-bit)
+            resample_quality: Resampling quality mode (unused, kept for API compatibility)
+
+        Raises:
+            ValueError: If bundleID cannot be determined for the given PID
+            RuntimeError: If Swift helper binary is not found
         """
         super().__init__(pid)
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self.sample_width = sample_width
 
         # Find bundleID from PID
         self.bundle_id = self._get_bundle_id_from_pid(pid)
@@ -132,6 +144,11 @@ class ScreenCaptureBackend(AudioBackend):
         self._audio_queue: queue.Queue = queue.Queue(maxsize=100)
         self._callback: Optional[Callable[[bytes], None]] = None
         self._running = False
+
+        log.info(
+            f"ScreenCaptureKit backend initialized: "
+            f"Native format is already standard (48kHz/2ch/float32) - no conversion needed"
+        )
 
     def _get_bundle_id_from_pid(self, pid: int) -> Optional[str]:
         """
@@ -198,25 +215,29 @@ class ScreenCaptureBackend(AudioBackend):
             log.error(f"Error getting bundleID for PID {pid}: {e}")
             return None
 
-    def get_format(self) -> dict[str, object]:
+    def get_format(self) -> dict[str, int | str]:
         """
-        Get audio format information.
+        Get audio format (always returns standard format).
 
         Returns:
-            Dictionary with sample_rate, channels, bits_per_sample, sample_width
+            Dictionary with:
+            - 'sample_rate': 48000
+            - 'channels': 2
+            - 'bits_per_sample': 32
+            - 'sample_format': 'float32'
         """
         return {
-            "sample_rate": self.sample_rate,
-            "channels": self.channels,
-            "bits_per_sample": self.sample_width * 8,
-            "sample_width": self.sample_width,
+            'sample_rate': STANDARD_SAMPLE_RATE,
+            'channels': STANDARD_CHANNELS,
+            'bits_per_sample': STANDARD_SAMPLE_WIDTH * 8,
+            'sample_format': STANDARD_FORMAT,
         }
 
     def _reader_worker(self):
         """
-        Background thread that reads PCM data from subprocess stdout.
+        Background thread that reads float32 PCM data from subprocess stdout.
 
-        Reads raw PCM data and either:
+        Reads raw float32 PCM data and either:
         - Calls the callback function directly (callback mode)
         - Puts data into queue (async iteration mode)
         """
@@ -228,7 +249,7 @@ class ScreenCaptureBackend(AudioBackend):
             # Formula: bytes_per_chunk = sample_rate * channels * sample_width * duration
             chunk_duration_ms = 10
             bytes_per_chunk = int(
-                self.sample_rate * self.channels * self.sample_width * chunk_duration_ms / 1000
+                STANDARD_SAMPLE_RATE * STANDARD_CHANNELS * STANDARD_SAMPLE_WIDTH * chunk_duration_ms / 1000
             )
 
             while self._running:
@@ -264,9 +285,12 @@ class ScreenCaptureBackend(AudioBackend):
             log.warning("Already running")
             return
 
-        # Store callback (without frame_count for now)
+        # Store callback (calculate frame_count using standard format)
         if on_data:
-            self._callback = lambda data: on_data(data, len(data) // (self.channels * self.sample_width))
+            self._callback = lambda data: on_data(
+                data,
+                len(data) // (STANDARD_CHANNELS * STANDARD_SAMPLE_WIDTH)
+            )
 
         # Verify bundle_id and binary_path are available
         if not self.bundle_id:
@@ -274,12 +298,12 @@ class ScreenCaptureBackend(AudioBackend):
         if not self.binary_path:
             raise RuntimeError("Binary path not set")
 
-        # Build command
+        # Build command with standard format parameters
         cmd = [
             str(self.binary_path),
             self.bundle_id,
-            str(self.sample_rate),
-            str(self.channels),
+            str(STANDARD_SAMPLE_RATE),
+            str(STANDARD_CHANNELS),
         ]
 
         log.info(f"Starting screencapture-audio: {' '.join(cmd)}")
@@ -338,9 +362,9 @@ class ScreenCaptureBackend(AudioBackend):
             num_frames: Number of audio frames to read (default: 1024)
 
         Returns:
-            PCM audio data as bytes
+            float32 PCM audio data as bytes in standard format
         """
-        bytes_per_frame = self.channels * self.sample_width
+        bytes_per_frame = STANDARD_CHANNELS * STANDARD_SAMPLE_WIDTH
         total_bytes_needed = num_frames * bytes_per_frame
 
         chunks = []

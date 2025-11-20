@@ -23,7 +23,8 @@ from pathlib import Path
 # Add src to path for development
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from proctap import ProcessAudioCapture, StreamConfig
+from proctap import ProcessAudioCapture
+import numpy as np
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,18 +110,6 @@ def main():
         default="screencapture_test.wav",
         help="Output WAV file path (default: screencapture_test.wav)"
     )
-    parser.add_argument(
-        "--sample-rate",
-        type=int,
-        default=48000,
-        help="Sample rate in Hz (default: 48000)"
-    )
-    parser.add_argument(
-        "--channels",
-        type=int,
-        default=2,
-        help="Number of channels (default: 2)"
-    )
 
     args = parser.parse_args()
 
@@ -133,20 +122,18 @@ def main():
         print("Error: Either --pid or --bundle-id must be specified", file=sys.stderr)
         sys.exit(1)
 
+    # Standard format constants (matching backend)
+    SAMPLE_RATE = 48000
+    CHANNELS = 2
+
     log.info(f"Testing ScreenCaptureKit capture for PID {pid}")
     log.info(f"Output: {args.output}")
     log.info(f"Duration: {args.duration} seconds")
-    log.info(f"Format: {args.sample_rate}Hz, {args.channels}ch, 16-bit PCM")
+    log.info(f"Format: {SAMPLE_RATE}Hz, {CHANNELS}ch, float32 (converted to 16-bit for WAV)")
 
-    # Create stream configuration
-    config = StreamConfig(
-        sample_rate=args.sample_rate,
-        channels=args.channels,
-    )
-
-    # Create audio capture
+    # Create audio capture (no config needed - uses standard format)
     try:
-        tap = ProcessAudioCapture(pid, config=config)
+        tap = ProcessAudioCapture(pid)
     except Exception as e:
         log.error(f"Failed to create capture: {e}")
         log.error("\nTroubleshooting:")
@@ -156,19 +143,25 @@ def main():
         log.error("3. Ensure target application is running and playing audio")
         sys.exit(1)
 
-    # Prepare WAV file
+    # Prepare WAV file (16-bit PCM)
     wav_file = wave.open(args.output, "wb")
-    wav_file.setnchannels(args.channels)
+    wav_file.setnchannels(CHANNELS)
     wav_file.setsampwidth(2)  # 16-bit
-    wav_file.setframerate(args.sample_rate)
+    wav_file.setframerate(SAMPLE_RATE)
 
     frames_written = 0
 
     def on_audio_data(data: bytes, frame_count: int):
+        """Convert float32 to int16 for WAV file."""
         nonlocal frames_written
-        wav_file.writeframes(data)
+
+        # Convert float32 PCM to int16 for WAV
+        float_samples = np.frombuffer(data, dtype=np.float32)
+        int16_samples = (np.clip(float_samples, -1.0, 1.0) * 32767).astype(np.int16)
+
+        wav_file.writeframes(int16_samples.tobytes())
         frames_written += frame_count
-        print(f"\rCaptured {frames_written} frames ({frames_written / args.sample_rate:.2f}s)", end="", flush=True)
+        print(f"\rCaptured {frames_written} frames ({frames_written / SAMPLE_RATE:.2f}s)", end="", flush=True)
 
     try:
         # Set callback and start capture
@@ -196,7 +189,7 @@ def main():
 
     log.info(f"Capture complete! Wrote {frames_written} frames to {args.output}")
     log.info(f"File size: {Path(args.output).stat().st_size / 1024:.2f} KB")
-    log.info(f"Duration: {frames_written / args.sample_rate:.2f} seconds")
+    log.info(f"Duration: {frames_written / SAMPLE_RATE:.2f} seconds")
 
 
 if __name__ == "__main__":

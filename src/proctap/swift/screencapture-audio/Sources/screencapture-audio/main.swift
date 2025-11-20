@@ -180,7 +180,8 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
             return
         }
 
-        // Write raw PCM data to stdout
+        // ScreenCaptureKit returns native float32 PCM (LPCM format)
+        // Write raw float32 PCM data to stdout (no conversion needed)
         let bufferPointer = UnsafeRawBufferPointer(start: data, count: length)
         let dataArray = Data(bufferPointer)
 

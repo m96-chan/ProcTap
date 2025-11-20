@@ -69,11 +69,9 @@ def get_backend(pid: int, resample_quality: ResampleQuality = 'best') -> "AudioB
             from .macos_screencapture import ScreenCaptureBackend, is_available as sc_available
             if sc_available():
                 log.info("Using ScreenCaptureKit backend (Recommended - macOS 13+)")
+                # ScreenCaptureKit already returns standard format (48kHz/2ch/float32)
                 return ScreenCaptureBackend(
                     pid=pid,
-                    sample_rate=48000,  # Native format (will be converted if needed)
-                    channels=2,
-                    sample_width=2,  # Native format: 16-bit int (will be converted to float32)
                     resample_quality=resample_quality,
                 )
         except ImportError as e:
@@ -92,7 +90,6 @@ def get_backend(pid: int, resample_quality: ResampleQuality = 'best') -> "AudioB
                     sample_rate=48000,  # Native format (will be converted if needed)
                     channels=2,
                     sample_width=2,  # Native format: 16-bit int (will be converted to float32)
-                    resample_quality=resample_quality,
                 )
         except ImportError:
             log.debug("PyObjC backend not available")
