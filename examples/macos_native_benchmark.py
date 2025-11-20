@@ -2,6 +2,11 @@
 """
 macOS Core Audio Process Tap native extension latency benchmark (Phase 4).
 
+⚠️  WARNING: This benchmark uses ARCHIVED experimental backend (archive/experimental-backends/macos_native.py)
+This backend is not used in production and has AMFI limitations on Apple Silicon.
+
+For production use, see examples/macos_basic.py which uses the recommended ScreenCaptureKit backend.
+
 This script measures the latency of the native C extension approach
 vs the Swift CLI helper approach (Phase 3).
 
@@ -22,11 +27,19 @@ import time
 import statistics
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Import from archived experimental backend
+sys.path.insert(0, str(Path(__file__).parent.parent / "archive" / "experimental-backends"))
 
 def benchmark_native_initialization():
     """Measure native extension initialization time."""
-    from proctap.backends.macos_native import MacOSNativeBackend, is_available
+    try:
+        from macos_native import MacOSNativeBackend, is_available  # type: ignore[import-not-found]
+    except ImportError as e:
+        print("Error: Could not import archived experimental backend")
+        print(f"Details: {e}")
+        print("\nThis benchmark uses the archived experimental backend which is not installed by default.")
+        print("For production use, see examples/macos_basic.py with ScreenCaptureKit backend.")
+        sys.exit(1)
 
     if not is_available():
         raise RuntimeError("Native macOS backend not available")
@@ -65,7 +78,12 @@ def benchmark_native_initialization():
 
 def benchmark_capture_startup():
     """Measure time to start capture and receive first data."""
-    from proctap.backends.macos_native import MacOSNativeBackend, is_available
+    try:
+        from macos_native import MacOSNativeBackend, is_available  # type: ignore[import-not-found]
+    except ImportError as e:
+        print("Error: Could not import archived experimental backend")
+        print(f"Details: {e}")
+        sys.exit(1)
 
     if not is_available():
         raise RuntimeError("Native macOS backend not available")

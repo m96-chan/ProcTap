@@ -220,7 +220,8 @@ backends/__init__.py (Platform Detection)
   - See [swift/screencapture-audio/](src/proctap/swift/screencapture-audio/) for Swift implementation
 
 **Experimental/Archived Backends**:
-- PyObjC backend: [backends/macos_pyobjc.py](src/proctap/backends/macos_pyobjc.py) - IOProc callback issues
+- PyObjC backend: [backends/macos_pyobjc.py](src/proctap/backends/macos_pyobjc.py) - IOProc callback issues (Fallback only)
+- Archived experimental backends: [archive/experimental-backends/](archive/experimental-backends/) - Process Tap implementations (AMFI limitations)
 - Process Tap investigation: [archive/apple-silicon-investigation-20251120/](archive/apple-silicon-investigation-20251120/) - AMFI limitations on Apple Silicon
 
 ### Threading Model
@@ -257,7 +258,8 @@ Audio Source (Process-specific)
 - `windows.py`: Windows implementation (wraps `_native.cpp` + format conversion)
 - `linux.py`: Linux PipeWire/PulseAudio implementation (fully supported, v0.3.0+)
 - `pipewire_native.py`: Native PipeWire API bindings (in development)
-- `macos.py`: macOS Core Audio Process Tap implementation (experimental)
+- `macos_screencapture.py`: macOS ScreenCaptureKit backend (recommended, macOS 13+)
+- `macos_pyobjc.py`: macOS PyObjC fallback backend (experimental, has IOProc issues)
 - `converter.py`: Audio format converter (sample rate, channels, bit depth)
 
 **[_native.cpp](src/proctap/_native.cpp)** - Windows C++ Extension:
@@ -294,10 +296,12 @@ The build system ([setup.py](setup.py)) automatically detects the platform and b
 - Python dependencies: `pulsectl` library (automatically installed)
 
 **macOS Builds:**
-- Pure Python backend using PyObjC (no compilation needed)
-- PyObjC dependencies installed automatically on macOS via environment markers
-- No Swift toolchain or Xcode required
-- **Experimental backends** (Swift CLI, C extension) are in `src/proctap/experimental/` and not recommended
+- Primary: ScreenCaptureKit backend via Swift CLI helper (automatic build)
+  - Swift helper built during `pip install` if Swift toolchain available
+  - Bundled binary included in package distribution
+- Fallback: PyObjC backend (no compilation needed)
+  - PyObjC dependencies installed automatically on macOS via environment markers
+- **Archived experimental backends** in `archive/experimental-backends/` (not used in production)
 
 ## Python Dependencies
 
@@ -437,16 +441,19 @@ Raw PCM data is returned as `bytes` to user callbacks/iterators.
    - Test with various PipeWire and PulseAudio versions
    - Validate fallback behavior
 
-**macOS Backend (Experimental):**
-1. **Core Audio Process Tap Implementation** ([backends/macos.py](src/proctap/backends/macos.py)):
-   - ✅ Basic implementation complete using Swift CLI helper
-   - ✅ macOS 14.4+ version detection
-   - ✅ Swift helper binary discovery and subprocess management
-   - ✅ PCM streaming from stdout
-   - TODO: Test on actual macOS 14.4+ system
-   - TODO: Handle permission prompts gracefully
-   - TODO: Improve error messages for common failure modes
-   - TODO: Code signing guidance for distribution
+**macOS Backend:**
+1. **ScreenCaptureKit Backend** ([backends/macos_screencapture.py](src/proctap/backends/macos_screencapture.py)):
+   - ✅ Production-ready (macOS 13+)
+   - ✅ BundleID-based capture
+   - ✅ Swift CLI helper with automatic build
+   - ✅ Screen Recording permission handling
+   - TODO: Improve error messages for common TCC permission failures
+   - TODO: Add universal binary support for Swift helper
+
+2. **PyObjC Fallback Backend** ([backends/macos_pyobjc.py](src/proctap/backends/macos_pyobjc.py)):
+   - ⚠️  Experimental fallback only
+   - ⚠️  IOProc callback reliability issues
+   - TODO: Investigate callback timing issues on different macOS versions
 
 **General:**
 1. **Test Coverage:**

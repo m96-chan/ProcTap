@@ -2,7 +2,12 @@
 """
 macOS Core Audio Process Tap advanced capture example.
 
-This example demonstrates advanced features of the macOS backend:
+⚠️  WARNING: This example uses ARCHIVED experimental backend (archive/experimental-backends/macos.py)
+This backend is not used in production and has AMFI limitations on Apple Silicon.
+
+For production use, see examples/macos_basic.py which uses the recommended ScreenCaptureKit backend.
+
+This example demonstrates advanced features of the experimental macOS backend:
 - Capturing from multiple processes (include_pids)
 - Excluding specific processes (exclude_pids)
 - Capturing all processes except certain ones
@@ -11,6 +16,7 @@ Requirements:
 - macOS 14.4 (Sonoma) or later
 - Swift CLI helper binary (proctap-macos)
 - Audio capture permission
+- AMFI disabled on Apple Silicon
 
 Usage Examples:
     # Capture from multiple specific processes
@@ -36,9 +42,14 @@ import time
 from pathlib import Path
 
 try:
-    from proctap.backends.macos import MacOSBackend
-except ImportError:
-    print("Error: proctap is not installed. Install it with: pip install proc-tap")
+    # Import from archived experimental backend
+    sys.path.insert(0, str(Path(__file__).parent.parent / "archive" / "experimental-backends"))
+    from macos import MacOSBackend  # type: ignore[import-not-found]
+except ImportError as e:
+    print("Error: Could not import archived experimental backend")
+    print(f"Details: {e}")
+    print("\nThis example uses the archived experimental backend which is not installed by default.")
+    print("For production use, see examples/macos_basic.py with ScreenCaptureKit backend.")
     sys.exit(1)
 
 

@@ -2,6 +2,11 @@
 """
 macOS Core Audio Process Tap latency benchmark.
 
+⚠️  WARNING: This benchmark uses ARCHIVED experimental backend (archive/experimental-backends/macos.py)
+This backend is not used in production and has AMFI limitations on Apple Silicon.
+
+For production use, see examples/macos_basic.py which uses the recommended ScreenCaptureKit backend.
+
 This script measures the latency of the Swift CLI helper approach
 for audio capture on macOS.
 
@@ -20,9 +25,17 @@ import subprocess
 import statistics
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Import from archived experimental backend
+sys.path.insert(0, str(Path(__file__).parent.parent / "archive" / "experimental-backends"))
 
-from proctap.backends.macos import find_helper_binary
+try:
+    from macos import find_helper_binary  # type: ignore[import-not-found]
+except ImportError as e:
+    print("Error: Could not import archived experimental backend")
+    print(f"Details: {e}")
+    print("\nThis benchmark uses the archived experimental backend which is not installed by default.")
+    print("For production use, see examples/macos_basic.py with ScreenCaptureKit backend.")
+    sys.exit(1)
 
 
 def benchmark_helper_startup():
