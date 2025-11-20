@@ -599,17 +599,18 @@ class MacOSNativeBackend(AudioBackend):
         except queue.Empty:
             return None
 
-    def get_format(self) -> dict[str, int | object]:
+    def get_format(self) -> dict[str, int | str]:
         """
         Get audio format information.
 
         Returns:
-            Dictionary with 'sample_rate', 'channels', 'bits_per_sample'
+            Dictionary with 'sample_rate', 'channels', 'bits_per_sample', 'sample_format'
         """
         return {
             'sample_rate': self._sample_rate,
             'channels': self._channels,
             'bits_per_sample': self._bits_per_sample,
+            'sample_format': 'int16',
         }
 
     def close(self) -> None:
