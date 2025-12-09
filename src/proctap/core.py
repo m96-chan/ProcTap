@@ -5,6 +5,7 @@ import threading
 import queue
 import asyncio
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +223,8 @@ class ProcessAudioCapture:
                 continue
 
             if not data:
-                # パケットがまだ無いケース。ここで sleep 入れるかは後で調整。
+                # No data available yet, sleep briefly to reduce CPU usage
+                time.sleep(0.001)  # 1ms sleep
                 continue
 
             # callback
