@@ -75,8 +75,10 @@ class AudioAnalyzer:
         self._spectrum: NDArray[np.float32] = np.zeros(fft_size // 2, dtype=np.float32)
         self._freqs: NDArray[np.float32] = np.fft.rfftfreq(fft_size, 1 / sample_rate).astype(np.float32)
 
-        # Audio buffer for analysis
-        self._buffer: deque[float] = deque(maxlen=fft_size * 2)
+        # Audio buffer for analysis (numpy ring buffer for efficiency)
+        self._buffer: NDArray[np.float32] = np.zeros(fft_size * 2, dtype=np.float32)
+        self._buffer_pos: int = 0  # Current write position in ring buffer
+        self._buffer_filled: int = 0  # Number of samples currently in buffer
         self._last_update = 0.0
 
     def process_audio(self, pcm: bytes) -> None:
@@ -93,8 +95,28 @@ class AudioAnalyzer:
         if self.channels == 2:
             samples = samples.reshape(-1, 2).mean(axis=1)
 
-        # Add to buffer
-        self._buffer.extend(samples)
+        # Add to ring buffer efficiently
+        n_samples = len(samples)
+        buffer_size = len(self._buffer)
+
+        if n_samples >= buffer_size:
+            # If new data is larger than buffer, just take the last buffer_size samples
+            self._buffer[:] = samples[-buffer_size:]
+            self._buffer_pos = 0
+            self._buffer_filled = buffer_size
+        else:
+            # Write samples to ring buffer
+            end_pos = self._buffer_pos + n_samples
+            if end_pos <= buffer_size:
+                # Simple case: no wrap-around
+                self._buffer[self._buffer_pos:end_pos] = samples
+            else:
+                # Wrap-around case
+                first_part = buffer_size - self._buffer_pos
+                self._buffer[self._buffer_pos:] = samples[:first_part]
+                self._buffer[:n_samples - first_part] = samples[first_part:]
+            self._buffer_pos = end_pos % buffer_size
+            self._buffer_filled = min(self._buffer_filled + n_samples, buffer_size)
 
         # Update analysis at specified interval
         now = time.time()
@@ -104,11 +126,23 @@ class AudioAnalyzer:
 
     def _update_analysis(self) -> None:
         """Update analysis from current buffer."""
-        if len(self._buffer) < self.fft_size:
+        if self._buffer_filled < self.fft_size:
             return
 
-        # Get latest samples
-        samples = np.array(list(self._buffer)[-self.fft_size :], dtype=np.float32)
+        # Get latest samples from ring buffer (no list conversion)
+        # We need the most recent fft_size samples ending at buffer_pos
+        end_pos = self._buffer_pos
+        start_pos = (end_pos - self.fft_size) % len(self._buffer)
+
+        if start_pos < end_pos:
+            # Simple case: no wrap-around
+            samples = self._buffer[start_pos:end_pos].copy()
+        else:
+            # Wrap-around case: concatenate two slices
+            samples = np.concatenate([
+                self._buffer[start_pos:],
+                self._buffer[:end_pos]
+            ])
 
         # Calculate RMS
         rms = np.sqrt(np.mean(samples**2))
