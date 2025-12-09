@@ -76,7 +76,8 @@ class ProcessAudioCapture:
 
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._async_queue: "queue.Queue[bytes | None]" = queue.Queue()
+        # Bounded queue to prevent unbounded memory growth (~1 second of audio at 10ms chunks)
+        self._async_queue: "queue.Queue[bytes | None]" = queue.Queue(maxsize=100)
 
     # --- public API -----------------------------------------------------
 
