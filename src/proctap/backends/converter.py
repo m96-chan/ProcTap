@@ -315,8 +315,10 @@ class AudioConverter:
         if audio.ndim == 2:
             audio = audio.flatten()
 
-        # Clip to [-1.0, 1.0] for safety
-        audio = np.clip(audio, -1.0, 1.0)
+        # For float32 output, skip clipping (data already clipped in _bytes_to_float)
+        # For integer outputs, clip to ensure safe conversion
+        if sample_format != SampleFormat.FLOAT32:
+            audio = np.clip(audio, -1.0, 1.0)
 
         if sample_format == SampleFormat.INT16:
             # 16-bit signed PCM
