@@ -308,12 +308,18 @@ class ScreenCaptureBackend(AudioBackend):
 
         log.info(f"Starting screencapture-audio: {' '.join(cmd)}")
 
+        # Calculate chunk size for buffering (10ms of audio)
+        chunk_duration_ms = 10
+        chunk_bytes = int(
+            STANDARD_SAMPLE_RATE * STANDARD_CHANNELS * STANDARD_SAMPLE_WIDTH * chunk_duration_ms / 1000
+        )
+
         # Start subprocess
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=0,  # Unbuffered for low latency
+            bufsize=chunk_bytes,  # Buffer one chunk to reduce system calls
         )
 
         self._running = True

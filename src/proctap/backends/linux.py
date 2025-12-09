@@ -441,16 +441,16 @@ class PulseAudioStrategy(LinuxAudioStrategy):
 
             logger.debug(f"Starting parec: {' '.join(cmd)}")
 
+            # Calculate chunk size for buffering
+            chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
+            chunk_bytes = chunk_frames * self._channels * self._sample_width
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0
+                bufsize=chunk_bytes,  # Buffer one chunk to reduce system calls
             )
-
-            # Read in chunks (configurable duration, default 10ms for low latency)
-            chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
-            chunk_bytes = chunk_frames * self._channels * self._sample_width
 
             while not self._stop_event.is_set():
                 try:
@@ -811,16 +811,16 @@ class PipeWireStrategy(LinuxAudioStrategy):
 
             logger.debug(f"Starting pw-record: {' '.join(cmd)}")
 
+            # Calculate chunk size for buffering
+            chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
+            chunk_bytes = chunk_frames * self._channels * self._sample_width
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0
+                bufsize=chunk_bytes,  # Buffer one chunk to reduce system calls
             )
-
-            # Read in chunks (configurable duration, default 10ms for low latency)
-            chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
-            chunk_bytes = chunk_frames * self._channels * self._sample_width
 
             while not self._stop_event.is_set():
                 try:
