@@ -15,6 +15,8 @@ import argparse
 import sys
 import signal
 import logging
+import time
+import traceback
 import numpy as np
 from typing import Optional
 
@@ -339,7 +341,6 @@ Examples:
         while not stop_requested:
             try:
                 # Sleep in small increments to respond quickly to signals
-                import time
                 time.sleep(0.1)
             except KeyboardInterrupt:
                 break
@@ -351,7 +352,6 @@ Examples:
 
     except Exception as e:
         logger.error(f"Error: {e}")
-        import traceback
         traceback.print_exc(file=sys.stderr)
         return 1
 
