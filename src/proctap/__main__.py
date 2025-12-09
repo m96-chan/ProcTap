@@ -106,8 +106,6 @@ def list_audio_processes() -> None:
             # Simpler approach: Just list processes with open audio devices
             # This works by checking for processes that are likely playing audio
 
-            active_procs = []
-
             # Common audio-related process keywords
             audio_keywords = [
                 'chrome', 'firefox', 'edge', 'msedge', 'opera', 'brave',
@@ -118,37 +116,38 @@ def list_audio_processes() -> None:
                 'audiodg', 'wmplayer', 'groove'
             ]
 
-            print(f"{'PID':<10} {'Process Name':<35} {'CPU %':<10} {'Memory (MB)'}")
-            print("-" * 75)
+            print(f"{'PID':<10} {'Process Name':<35} {'Memory (MB)'}")
+            print("-" * 60)
 
-            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info']):
+            # Collect matching processes (fast pass without blocking cpu_percent)
+            matching_procs = []
+            for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
                 try:
                     pid = proc.info['pid']
                     name = proc.info['name']
 
+                    if name is None:
+                        continue
+
                     # Filter for audio-related processes
                     if any(keyword in name.lower() for keyword in audio_keywords):
-                        cpu = proc.cpu_percent(interval=0.1)
-                        mem_mb = proc.info['memory_info'].rss / (1024 * 1024)
-
-                        # Only show if using CPU (likely active)
-                        if cpu > 0.1:
-                            active_procs.append((pid, name, cpu, mem_mb))
+                        mem_mb = proc.info['memory_info'].rss / (1024 * 1024) if proc.info['memory_info'] else 0
+                        matching_procs.append((pid, name, mem_mb))
 
                 except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError, KeyError):
                     pass
 
-            # Sort by CPU usage (descending)
-            active_procs.sort(key=lambda x: x[2], reverse=True)
+            # Sort by memory usage (descending) as a proxy for activity
+            matching_procs.sort(key=lambda x: x[2], reverse=True)
 
-            for pid, name, cpu, mem_mb in active_procs:
-                print(f"{pid:<10} {name:<35} {cpu:<10.1f} {mem_mb:<.1f}")
+            for pid, name, mem_mb in matching_procs:
+                print(f"{pid:<10} {name:<35} {mem_mb:<.1f}")
 
-            if not active_procs:
-                print("\nNo active audio processes detected")
+            if not matching_procs:
+                print("\nNo audio processes detected")
                 print("Tip: This shows processes that might be playing audio based on process names.")
             else:
-                print(f"\nFound {len(active_procs)} potentially active audio process(es)")
+                print(f"\nFound {len(matching_procs)} potentially active audio process(es)")
                 print("Note: This is a heuristic detection. Use --pid or --name to specify the target process.")
 
         except Exception as e:
