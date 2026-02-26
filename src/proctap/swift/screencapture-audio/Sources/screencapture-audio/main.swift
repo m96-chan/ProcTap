@@ -4,6 +4,24 @@ import AVFoundation
 import CoreMedia
 import CoreAudio
 
+// MARK: - Helpers
+
+/// Write all bytes to stdout using POSIX write() — no Data copy, no Foundation overhead.
+func writeAllToStdout(_ ptr: UnsafeRawPointer, count: Int) {
+    var remaining = count
+    var offset = 0
+    while remaining > 0 {
+        let written = write(STDOUT_FILENO, ptr + offset, remaining)
+        if written < 0 {
+            if errno == EINTR { continue }  // interrupted by signal — retry
+            break
+        }
+        if written == 0 { break }  // stdout closed
+        remaining -= written
+        offset += written
+    }
+}
+
 // MARK: - Audio Capture Stream Handler
 
 @available(macOS 13.0, *)
@@ -277,11 +295,9 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
                 }
             }
 
-            // Write interleaved data to stdout
+            // Write interleaved data to stdout via POSIX write()
             interleaveBuffer.withUnsafeBufferPointer { bufPtr in
-                let bytes = interleavedCount * MemoryLayout<Float>.size
-                let bufferPointer = UnsafeRawBufferPointer(start: bufPtr.baseAddress!, count: bytes)
-                FileHandle.standardOutput.write(Data(bufferPointer))
+                writeAllToStdout(bufPtr.baseAddress!, count: interleavedCount * MemoryLayout<Float>.size)
             }
         } else {
             // ── Interleaved: single buffer with [L0, R0, L1, R1, ...] ──
@@ -306,8 +322,7 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
                 return
             }
 
-            let bufferPointer = UnsafeRawBufferPointer(start: data, count: length)
-            FileHandle.standardOutput.write(Data(bufferPointer))
+            writeAllToStdout(data, count: length)
         }
     }
 
@@ -325,6 +340,9 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
 @main
 struct ScreenCaptureAudio {
     static func main() async {
+        // Disable C stdout buffering so writes go to pipe immediately
+        setbuf(stdout, nil)
+
         // Parse command line arguments
         let arguments = CommandLine.arguments
 
@@ -341,7 +359,7 @@ struct ScreenCaptureAudio {
               screencapture-audio com.google.Chrome 48000 2 > output.pcm
 
             Output:
-              Raw PCM audio data is written to stdout
+              Raw PCM audio data is written to stdout (interleaved float32)
               Progress/errors are written to stderr
 
             Required Permissions:
