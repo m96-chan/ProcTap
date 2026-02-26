@@ -13,6 +13,7 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
     private let sampleRate: Int
     private let channels: Int
     private var isRunning = false
+    private let writeQueue = DispatchQueue(label: "audio.stdout.writer", qos: .userInteractive)
 
     init(bundleID: String, sampleRate: Int = 48000, channels: Int = 2) {
         self.bundleID = bundleID
@@ -124,10 +125,10 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
 
         fputs("Created SCStream instance\n", stderr)
 
-        // Add audio output handler
-        try newStream.addStreamOutput(self, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
+        // Add audio output handler on dedicated serial queue to prevent concurrent writes
+        try newStream.addStreamOutput(self, type: .audio, sampleHandlerQueue: writeQueue)
 
-        fputs("Added audio output handler\n", stderr)
+        fputs("Added audio output handler (serial queue)\n", stderr)
         fputs("Starting audio capture stream...\n", stderr)
 
         do {
