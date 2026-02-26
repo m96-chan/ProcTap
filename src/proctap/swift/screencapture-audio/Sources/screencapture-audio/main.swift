@@ -14,6 +14,9 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
     private let channels: Int
     private var isRunning = false
     private let writeQueue = DispatchQueue(label: "audio.stdout.writer", qos: .userInteractive)
+    // Accessed only from writeQueue (the sampleHandlerQueue) — no additional synchronization needed
+    private var didLogFormat = false
+    private var interleaveBuffer = [Float]()  // reusable — avoids alloc per callback
 
     init(bundleID: String, sampleRate: Int = 48000, channels: Int = 2) {
         self.bundleID = bundleID
@@ -159,34 +162,153 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
             return
         }
 
-        // Extract PCM audio data from CMSampleBuffer
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-            fputs("WARNING: No data buffer in sample\n", stderr)
+        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) else {
+            fputs("WARNING: No format description in sample buffer\n", stderr)
             return
         }
 
-        var length: Int = 0
-        var dataPointer: UnsafeMutablePointer<Int8>?
-
-        let status = CMBlockBufferGetDataPointer(
-            blockBuffer,
-            atOffset: 0,
-            lengthAtOffsetOut: nil,
-            totalLengthOut: &length,
-            dataPointerOut: &dataPointer
-        )
-
-        guard status == kCMBlockBufferNoErr, let data = dataPointer else {
-            fputs("WARNING: Failed to get data pointer (status=\(status))\n", stderr)
+        guard let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee else {
+            fputs("WARNING: No AudioStreamBasicDescription\n", stderr)
             return
         }
 
-        // ScreenCaptureKit returns native float32 PCM (LPCM format)
-        // Write raw float32 PCM data to stdout (no conversion needed)
-        let bufferPointer = UnsafeRawBufferPointer(start: data, count: length)
-        let dataArray = Data(bufferPointer)
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
 
-        FileHandle.standardOutput.write(dataArray)
+        // Log format once
+        if !didLogFormat {
+            didLogFormat = true
+            fputs(String(format: "Audio format: %.0f Hz, %dch, %d-bit, flags=0x%X (nonInterleaved=%@)\n",
+                         asbd.mSampleRate,
+                         Int(asbd.mChannelsPerFrame),
+                         Int(asbd.mBitsPerChannel),
+                         UInt(asbd.mFormatFlags),
+                         isNonInterleaved ? "true" : "false"), stderr)
+        }
+
+        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard numSamples > 0 else { return }
+
+        if isNonInterleaved {
+            // ── Non-interleaved (planar): separate buffer per channel ──
+            // ScreenCaptureKit on macOS 13+ typically delivers planar float32:
+            //   Buffer 0: [L0, L1, ..., Ln]
+            //   Buffer 1: [R0, R1, ..., Rn]
+            // We must interleave to [L0, R0, L1, R1, ...] for stdout.
+
+            // Use size-query pattern: first call gets required size, second fills the list
+            var sizeNeeded: Int = 0
+            let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+                sampleBuffer,
+                bufferListSizeNeededOut: &sizeNeeded,
+                bufferListOut: nil,
+                bufferListSize: 0,
+                blockBufferAllocator: nil,
+                blockBufferMemoryAllocator: nil,
+                flags: 0,
+                blockBufferOut: nil
+            )
+
+            guard sizeStatus == noErr, sizeNeeded > 0 else {
+                fputs("WARNING: Failed to query AudioBufferList size (status=\(sizeStatus))\n", stderr)
+                return
+            }
+
+            let ablRaw = UnsafeMutableRawPointer.allocate(
+                byteCount: sizeNeeded,
+                alignment: MemoryLayout<AudioBufferList>.alignment
+            )
+            defer { ablRaw.deallocate() }
+
+            let ablPtr = ablRaw.bindMemory(to: AudioBufferList.self, capacity: 1)
+
+            // blockBuffer must be retained for the lifetime of the AudioBufferList pointers
+            var blockBuffer: CMBlockBuffer?
+            let fillStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+                sampleBuffer,
+                bufferListSizeNeededOut: nil,
+                bufferListOut: ablPtr,
+                bufferListSize: sizeNeeded,
+                blockBufferAllocator: kCFAllocatorDefault,
+                blockBufferMemoryAllocator: kCFAllocatorDefault,
+                flags: 0,
+                blockBufferOut: &blockBuffer
+            )
+
+            guard fillStatus == noErr else {
+                fputs("WARNING: Failed to fill AudioBufferList (status=\(fillStatus))\n", stderr)
+                return
+            }
+
+            let abl = UnsafeMutableAudioBufferListPointer(ablPtr)
+            let channelCount = Int(asbd.mChannelsPerFrame)
+
+            // Collect per-channel float pointers
+            var channelPtrs: [UnsafeBufferPointer<Float>] = []
+            var framesPerChannel = 0
+
+            for i in 0..<min(channelCount, abl.count) {
+                let buf = abl[i]
+                let floatCount = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+                if let data = buf.mData {
+                    channelPtrs.append(UnsafeBufferPointer(
+                        start: data.assumingMemoryBound(to: Float.self),
+                        count: floatCount
+                    ))
+                    framesPerChannel = max(framesPerChannel, floatCount)
+                }
+            }
+
+            guard !channelPtrs.isEmpty, framesPerChannel > 0 else { return }
+
+            // Interleave: [L0, R0, L1, R1, ...]
+            let interleavedCount = framesPerChannel * channelPtrs.count
+            if interleaveBuffer.count < interleavedCount {
+                interleaveBuffer = [Float](repeating: 0.0, count: interleavedCount)
+            }
+
+            for frame in 0..<framesPerChannel {
+                for ch in 0..<channelPtrs.count {
+                    let idx = frame * channelPtrs.count + ch
+                    if frame < channelPtrs[ch].count {
+                        interleaveBuffer[idx] = channelPtrs[ch][frame]
+                    } else {
+                        interleaveBuffer[idx] = 0.0  // zero-fill if channel is shorter
+                    }
+                }
+            }
+
+            // Write interleaved data to stdout
+            interleaveBuffer.withUnsafeBufferPointer { bufPtr in
+                let bytes = interleavedCount * MemoryLayout<Float>.size
+                let bufferPointer = UnsafeRawBufferPointer(start: bufPtr.baseAddress!, count: bytes)
+                FileHandle.standardOutput.write(Data(bufferPointer))
+            }
+        } else {
+            // ── Interleaved: single buffer with [L0, R0, L1, R1, ...] ──
+            guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+                fputs("WARNING: No data buffer in sample\n", stderr)
+                return
+            }
+
+            var length: Int = 0
+            var dataPointer: UnsafeMutablePointer<Int8>?
+
+            let status = CMBlockBufferGetDataPointer(
+                blockBuffer,
+                atOffset: 0,
+                lengthAtOffsetOut: nil,
+                totalLengthOut: &length,
+                dataPointerOut: &dataPointer
+            )
+
+            guard status == kCMBlockBufferNoErr, let data = dataPointer else {
+                fputs("WARNING: Failed to get data pointer (status=\(status))\n", stderr)
+                return
+            }
+
+            let bufferPointer = UnsafeRawBufferPointer(start: data, count: length)
+            FileHandle.standardOutput.write(Data(bufferPointer))
+        }
     }
 
     // MARK: - SCStreamDelegate
