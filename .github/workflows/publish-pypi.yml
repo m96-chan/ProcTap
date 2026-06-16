@@ -19,12 +19,12 @@ jobs:
 
     steps:
       - name: Checkout repository at specified tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -60,14 +60,14 @@ jobs:
           python -m build --sdist
 
       - name: Upload wheel artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.os }}-py${{ matrix.python-version }}
           path: dist/*.whl
 
       - name: Upload sdist artifact
         if: runner.os == 'Linux' && matrix.python-version == '3.11'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: dist/*.tar.gz
@@ -80,7 +80,7 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
 
@@ -91,7 +91,7 @@ jobs:
           ls -lh dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.4
+        uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
           # user: __token__
           # password: ${{ secrets.PYPI_API_TOKEN }}
