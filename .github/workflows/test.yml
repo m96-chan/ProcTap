@@ -25,24 +25,14 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-        experimental: [false]
-        # Track the Python 3.15 pre-release on every OS. allow-prereleases lets
-        # actions/setup-python pick up the latest alpha/beta/RC; experimental:
-        # true wires continue-on-error so a 3.15 regression does not break the
-        # required check while the 3.14 row still gates merges.
-        include:
-          - os: ubuntu-latest
-            python-version: "3.15"
-            experimental: true
-          - os: macos-latest
-            python-version: "3.15"
-            experimental: true
-          - os: windows-latest
-            python-version: "3.15"
-            experimental: true
+        # NOTE: Python 3.15 pre-release rows were removed in 2026-06.
+        # scipy does not yet ship cp315 wheels (alpha-stage), so
+        # `pip install -e ".[dev]"` falls back to a source build that
+        # needs gfortran on macOS / Windows and fails uniformly.
+        # Add 3.15 back once 3.15.0 ships (2026-10) and scipy publishes
+        # matching wheels.
 
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
 
     steps:
       - name: Checkout repository
@@ -52,7 +42,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
 
       # Linux: Install PulseAudio dependencies
       - name: Install PulseAudio (Linux)
