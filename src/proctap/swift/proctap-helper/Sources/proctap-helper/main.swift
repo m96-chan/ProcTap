@@ -182,6 +182,35 @@ struct ProcTapHelper {
 
         fputs("Process Tap created: device ID \(tapDeviceID)\n", stderr)
 
+        // Read the tap's ACTUAL UID; the aggregate's tap list must reference this
+        // (not merely the description's UUID) or the aggregate input is the phantom
+        // silent input of the output subdevice instead of the tap.
+        var tapUIDAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var tapUIDRef: Unmanaged<CFString>?
+        var tapUIDSize = UInt32(MemoryLayout<CFString>.size)
+        let tapUIDStatus = AudioObjectGetPropertyData(
+            tapDeviceID, &tapUIDAddr, 0, nil, &tapUIDSize, &tapUIDRef)
+        let tapUIDString: String = (tapUIDStatus == noErr)
+            ? (tapUIDRef?.takeRetainedValue() as String? ?? tapUUID.uuidString)
+            : tapUUID.uuidString
+        fputs("Tap UID: \(tapUIDString) (desc uuid: \(tapUUID.uuidString), status=\(tapUIDStatus))\n", stderr)
+
+        // Read the tap's actual stream format (0 ch / 0 Hz => tap not really configured).
+        var tapFmtAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var tapASBD = AudioStreamBasicDescription()
+        var tapFmtSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        let tapFmtStatus = AudioObjectGetPropertyData(
+            tapDeviceID, &tapFmtAddr, 0, nil, &tapFmtSize, &tapASBD)
+        fputs("Tap format: status=\(tapFmtStatus) rate=\(tapASBD.mSampleRate) ch=\(tapASBD.mChannelsPerFrame) bits=\(tapASBD.mBitsPerChannel) flags=\(tapASBD.mFormatFlags) bytesPerFrame=\(tapASBD.mBytesPerFrame)\n", stderr)
+
         // Get default output device
         var defaultOutputPropertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -214,7 +243,7 @@ struct ProcTapHelper {
         )
 
         var outputUID: Unmanaged<CFString>?
-        var uidSize = UInt32(MemoryLayout<CFString>.size)
+        var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
 
         status = AudioObjectGetPropertyData(
             defaultOutputID,
@@ -225,21 +254,28 @@ struct ProcTapHelper {
         )
 
         let outputUIDString: String
-        if status == noErr, let uid = outputUID?.takeUnretainedValue() as String? {
-            outputUIDString = uid
+        if status == noErr, let uid = outputUID?.takeRetainedValue() {
+            outputUIDString = uid as String
         } else {
+            fputs("WARNING: could not read default output UID (status=\(status)); using fallback\n", stderr)
             outputUIDString = "BuiltInSpeakerDevice"
         }
 
         // Create Aggregate Device
         let aggregateUID = UUID().uuidString
 
+        // NOTE: the tap auto-start key is "tapautostart" (kAudioAggregateDeviceTapAutoStartKey);
+        // the archived code used "autostart", which is ignored, so the tap was never
+        // started and delivered silence.
+        // Aggregate device wrapping the process tap (AudioCap-style). The tap auto-start
+        // key is "tapautostart" (kAudioAggregateDeviceTapAutoStartKey) — the archived
+        // code used "autostart", which is ignored.
         let description: [String: Any] = [
             "name": "ProcTap-\(pid)",
             "uid": aggregateUID,
             "private": true,
             "stacked": false,
-            "autostart": true,
+            "tapautostart": true,
             "master": outputUIDString,
             "subdevices": [
                 ["uid": outputUIDString]
@@ -247,10 +283,11 @@ struct ProcTapHelper {
             "taps": [
                 [
                     "drift": true,
-                    "uid": tapUUID.uuidString
+                    "uid": tapUIDString
                 ]
             ]
         ]
+        fputs("Aggregate output master UID: \(outputUIDString)\n", stderr)
 
         var aggregateDeviceID: AudioObjectID = 0
         status = AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateDeviceID)
