@@ -105,6 +105,18 @@ class LinuxAudioStrategy(ABC):
     Allows switching between PulseAudio and PipeWire implementations.
     """
 
+    def __init__(
+        self, pid: int, sample_rate: int, channels: int, sample_width: int
+    ) -> None:
+        """
+        Every strategy is constructed with the target PID and capture format.
+
+        This only declares the shared constructor contract; concrete subclasses
+        override it and may supply their own sensible defaults for the format
+        arguments.
+        """
+        ...
+
     @abstractmethod
     def connect(self) -> None:
         """Connect to the audio server."""
@@ -994,83 +1006,10 @@ class LinuxBackend(AudioBackend):
                     "Could not detect audio server type, defaulting to PulseAudio"
                 )
 
-        # Select strategy based on detected/specified engine
-        if detected_engine == "pipewire-native":
-            # Try native PipeWire strategy first
-            try:
-                self._strategy: LinuxAudioStrategy = PipeWireNativeStrategy(
-                    pid=pid,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sample_width=sample_width,
-                )
-                logger.info(
-                    f"Initialized LinuxBackend for PID {pid} "
-                    f"(engine: PipeWire Native API - ultra-low latency)"
-                )
-            except RuntimeError as e:
-                logger.warning(
-                    f"PipeWire native initialization failed, "
-                    f"falling back to subprocess: {e}"
-                )
-                # Fall back to subprocess-based PipeWire
-                try:
-                    self._strategy = PipeWireStrategy(
-                        pid=pid,
-                        sample_rate=sample_rate,
-                        channels=channels,
-                        sample_width=sample_width,
-                    )
-                    logger.info(
-                        f"Initialized LinuxBackend for PID {pid} (engine: PipeWire subprocess)"
-                    )
-                except RuntimeError as e2:
-                    logger.warning(f"PipeWire subprocess failed, falling back to PulseAudio: {e2}")
-                    self._strategy = PulseAudioStrategy(
-                        pid=pid,
-                        sample_rate=sample_rate,
-                        channels=channels,
-                        sample_width=sample_width,
-                    )
-                    logger.info(
-                        f"Initialized LinuxBackend for PID {pid} (engine: PulseAudio fallback)"
-                    )
-        elif detected_engine == "pulse":
-            self._strategy = PulseAudioStrategy(
-                pid=pid,
-                sample_rate=sample_rate,
-                channels=channels,
-                sample_width=sample_width,
-            )
-            logger.info(f"Initialized LinuxBackend for PID {pid} (engine: PulseAudio)")
-        elif detected_engine == "pipewire":
-            # Try PipeWire subprocess strategy, fall back to PulseAudio if it fails
-            try:
-                self._strategy = PipeWireStrategy(
-                    pid=pid,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sample_width=sample_width,
-                )
-                logger.info(f"Initialized LinuxBackend for PID {pid} (engine: PipeWire subprocess)")
-            except RuntimeError as e:
-                logger.warning(
-                    f"PipeWire initialization failed, falling back to PulseAudio: {e}"
-                )
-                self._strategy = PulseAudioStrategy(
-                    pid=pid,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sample_width=sample_width,
-                )
-                logger.info(
-                    f"Initialized LinuxBackend for PID {pid} (engine: PulseAudio fallback)"
-                )
-        else:
-            raise ValueError(
-                f"Unknown engine: {engine}. "
-                f"Use 'auto', 'pulse', 'pipewire', or 'pipewire-native'"
-            )
+        # Select strategy by walking the ordered fallback chain for this engine.
+        self._strategy: LinuxAudioStrategy = self._create_strategy(
+            detected_engine, pid, sample_rate, channels, sample_width
+        )
 
         # Setup audio format converter
         # Linux backends always capture as int16, so we need to convert to float32
@@ -1092,6 +1031,67 @@ class LinuxBackend(AudioBackend):
             f"{STANDARD_SAMPLE_RATE}Hz/{STANDARD_CHANNELS}ch/float32 "
             f"(quality={resample_quality})"
         )
+
+    def _get_strategy_chain(self, engine: str) -> list[type[LinuxAudioStrategy]]:
+        """
+        Return the ordered strategy classes to try for ``engine``.
+
+        Earlier entries are preferred; later entries are fallbacks used when an
+        earlier strategy cannot initialize on this system.
+
+        Raises:
+            ValueError: If ``engine`` is not a recognised value.
+        """
+        chains: dict[str, list[type[LinuxAudioStrategy]]] = {
+            "pipewire-native": [PipeWireNativeStrategy, PipeWireStrategy, PulseAudioStrategy],
+            "pipewire": [PipeWireStrategy, PulseAudioStrategy],
+            "pulse": [PulseAudioStrategy],
+        }
+        try:
+            return chains[engine]
+        except KeyError:
+            raise ValueError(
+                f"Unknown engine: {engine}. "
+                f"Use 'auto', 'pulse', 'pipewire', or 'pipewire-native'"
+            )
+
+    def _create_strategy(
+        self,
+        engine: str,
+        pid: int,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> LinuxAudioStrategy:
+        """
+        Instantiate the first strategy in the chain that initializes successfully.
+
+        Raises:
+            ValueError: If ``engine`` is unknown.
+            RuntimeError: If every strategy in the chain fails to initialize.
+        """
+        last_error: Optional[Exception] = None
+        for strategy_class in self._get_strategy_chain(engine):
+            try:
+                strategy = strategy_class(
+                    pid=pid,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    sample_width=sample_width,
+                )
+                logger.info(
+                    f"Initialized LinuxBackend for PID {pid} "
+                    f"(strategy: {strategy_class.__name__})"
+                )
+                return strategy
+            except RuntimeError as e:
+                last_error = e
+                logger.warning(f"{strategy_class.__name__} initialization failed: {e}")
+
+        raise RuntimeError(
+            f"No audio capture strategy could be initialized for engine '{engine}'. "
+            f"Last error: {last_error}"
+        ) from last_error
 
     def start(self) -> None:
         """
