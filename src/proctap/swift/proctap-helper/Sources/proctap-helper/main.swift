@@ -10,9 +10,16 @@ func AudioHardwareCreateProcessTap(_ tapDescription: AnyObject, _ outTapID: Unsa
 @_silgen_name("AudioHardwareDestroyProcessTap")
 func AudioHardwareDestroyProcessTap(_ tapID: AudioObjectID) -> OSStatus
 
+// Verbose diagnostics go to stderr only when PROCTAP_VERBOSE is set. Errors and
+// the "Ready" readiness marker are always printed.
+let g_verbose = ProcessInfo.processInfo.environment["PROCTAP_VERBOSE"] != nil
+func dlog(_ msg: String) {
+    if g_verbose { fputs(msg, stderr) }
+}
+
 @available(macOS 14.2, *)
 func requestMicrophonePermission() -> Bool {
-    fputs("Requesting microphone permission...\n", stderr)
+    dlog("Requesting microphone permission...\n")
 
     let semaphore = DispatchSemaphore(value: 0)
     var granted = false
@@ -20,9 +27,9 @@ func requestMicrophonePermission() -> Bool {
     AVCaptureDevice.requestAccess(for: .audio) { result in
         granted = result
         if result {
-            fputs("Microphone permission granted\n", stderr)
+            dlog("Microphone permission granted\n")
         } else {
-            fputs("Microphone permission denied\n", stderr)
+            dlog("Microphone permission denied\n")
         }
         semaphore.signal()
     }
@@ -46,15 +53,15 @@ func checkScreenRecordingPermission() -> Bool {
     // CGWindowListCopyWindowInfo (which returns window metadata even WITHOUT the
     // permission and so gives a false positive).
     let has = CGPreflightScreenCaptureAccess()
-    fputs("Screen Recording preflight: \(has)\n", stderr)
+    dlog("Screen Recording preflight: \(has)\n")
     if has { return true }
 
     // Not granted: ask the system to register/prompt this binary.
     let granted = CGRequestScreenCaptureAccess()
-    fputs("Screen Recording request result: \(granted)\n", stderr)
+    dlog("Screen Recording request result: \(granted)\n")
     if !granted {
         fputs("ERROR: Screen Recording permission required. Enable it for this binary in\n", stderr)
-        fputs("System Settings > Privacy & Security > Screen Recording, then relaunch.\n", stderr)
+        dlog("System Settings > Privacy & Security > Screen Recording, then relaunch.\n")
     }
     return granted
 }
@@ -65,14 +72,14 @@ func checkMicrophonePermission() -> Bool {
 
     switch status {
     case .authorized:
-        fputs("Microphone permission: Already authorized\n", stderr)
+        dlog("Microphone permission: Already authorized\n")
         return true
     case .notDetermined:
-        fputs("Microphone permission: Not determined, requesting...\n", stderr)
+        dlog("Microphone permission: Not determined, requesting...\n")
         return requestMicrophonePermission()
     case .denied:
         fputs("ERROR: Microphone permission denied\n", stderr)
-        fputs("Please grant microphone access in System Settings > Privacy & Security > Microphone\n", stderr)
+        dlog("Please grant microphone access in System Settings > Privacy & Security > Microphone\n")
         return false
     case .restricted:
         fputs("ERROR: Microphone access is restricted\n", stderr)
@@ -126,7 +133,7 @@ func findProcessAudioObject(pid: pid_t) -> AudioObjectID? {
     )
 
     if status == noErr && processObjectID != 0 {
-        fputs("Found process object ID \(processObjectID) for PID \(pid)\n", stderr)
+        dlog("Found process object ID \(processObjectID) for PID \(pid)\n")
         return processObjectID
     } else {
         fputs("ERROR: Failed to translate PID \(pid) to process object (status=\(status), objectID=\(processObjectID))\n", stderr)
@@ -162,10 +169,10 @@ struct ProcTapHelper {
                 fputs("Error: cannot open output file \(outPath)\n", stderr)
                 exit(1)
             }
-            fputs("Writing PCM to file: \(outPath)\n", stderr)
+            dlog("Writing PCM to file: \(outPath)\n")
         }
 
-        fputs("ProcTap Helper starting for PID \(pid)\n", stderr)
+        dlog("ProcTap Helper starting for PID \(pid)\n")
 
         // Check and request all required permissions
         if !checkAllPermissions() {
@@ -178,7 +185,7 @@ struct ProcTapHelper {
             exit(1)
         }
 
-        fputs("Found process audio object: \(processObjectID)\n", stderr)
+        dlog("Found process audio object: \(processObjectID)\n")
 
         // DIAGNOSTIC: is the tapped process actually rendering output audio right now?
         var runAddr = AudioObjectPropertyAddress(
@@ -190,7 +197,7 @@ struct ProcTapHelper {
         var runSize = UInt32(MemoryLayout<UInt32>.size)
         let runStatus = AudioObjectGetPropertyData(
             processObjectID, &runAddr, 0, nil, &runSize, &isRunningOut)
-        fputs("Process isRunningOutput=\(isRunningOut) (status=\(runStatus))\n", stderr)
+        dlog("Process isRunningOutput=\(isRunningOut) (status=\(runStatus))\n")
 
         // CATapDescription is a public class since macOS 14.4. Construct it
         // directly instead of via fragile Objective-C runtime calls (the old
@@ -199,7 +206,7 @@ struct ProcTapHelper {
         let tapDescription = CATapDescription(stereoMixdownOfProcesses: [processObjectID])
         tapDescription.uuid = tapUUID
 
-        fputs("Created tap description\n", stderr)
+        dlog("Created tap description\n")
 
         // Create Process Tap
         var tapDeviceID: AudioObjectID = 0
@@ -210,7 +217,7 @@ struct ProcTapHelper {
             exit(1)
         }
 
-        fputs("Process Tap created: device ID \(tapDeviceID)\n", stderr)
+        dlog("Process Tap created: device ID \(tapDeviceID)\n")
 
         // Read the tap's ACTUAL UID; the aggregate's tap list must reference this
         // (not merely the description's UUID) or the aggregate input is the phantom
@@ -227,7 +234,7 @@ struct ProcTapHelper {
         let tapUIDString: String = (tapUIDStatus == noErr)
             ? (tapUIDRef?.takeRetainedValue() as String? ?? tapUUID.uuidString)
             : tapUUID.uuidString
-        fputs("Tap UID: \(tapUIDString) (desc uuid: \(tapUUID.uuidString), status=\(tapUIDStatus))\n", stderr)
+        dlog("Tap UID: \(tapUIDString) (desc uuid: \(tapUUID.uuidString), status=\(tapUIDStatus))\n")
 
         // Read the tap's actual stream format (0 ch / 0 Hz => tap not really configured).
         var tapFmtAddr = AudioObjectPropertyAddress(
@@ -239,7 +246,7 @@ struct ProcTapHelper {
         var tapFmtSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         let tapFmtStatus = AudioObjectGetPropertyData(
             tapDeviceID, &tapFmtAddr, 0, nil, &tapFmtSize, &tapASBD)
-        fputs("Tap format: status=\(tapFmtStatus) rate=\(tapASBD.mSampleRate) ch=\(tapASBD.mChannelsPerFrame) bits=\(tapASBD.mBitsPerChannel) flags=\(tapASBD.mFormatFlags) bytesPerFrame=\(tapASBD.mBytesPerFrame)\n", stderr)
+        dlog("Tap format: status=\(tapFmtStatus) rate=\(tapASBD.mSampleRate) ch=\(tapASBD.mChannelsPerFrame) bits=\(tapASBD.mBitsPerChannel) flags=\(tapASBD.mFormatFlags) bytesPerFrame=\(tapASBD.mBytesPerFrame)\n")
 
         // Get default output device
         var defaultOutputPropertyAddress = AudioObjectPropertyAddress(
@@ -317,7 +324,7 @@ struct ProcTapHelper {
                 ]
             ]
         ]
-        fputs("Aggregate output master UID: \(outputUIDString)\n", stderr)
+        dlog("Aggregate output master UID: \(outputUIDString)\n")
 
         var aggregateDeviceID: AudioObjectID = 0
         status = AudioHardwareCreateAggregateDevice(description as CFDictionary, &aggregateDeviceID)
@@ -328,7 +335,7 @@ struct ProcTapHelper {
             exit(1)
         }
 
-        fputs("Aggregate Device created\n", stderr)
+        dlog("Aggregate Device created\n")
 
         // Create IOProc with block
         let queue = DispatchQueue(label: "com.proctap.ioproc", qos: .userInitiated)
