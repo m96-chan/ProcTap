@@ -240,3 +240,10 @@ test_with_safari.sh
 # Intermediate documentation
 MACOS_SCREENCAPTUREKIT_SUMMARY.md
 SCREENCAPTUREKIT_IMPLEMENTATION.md
+
+# Claude Code local (personal) instructions
+CLAUDE.local.md
+
+# Signing secrets (never commit)
+*.p12
+.proctap_p12_pw
