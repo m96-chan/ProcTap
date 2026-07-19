@@ -128,7 +128,7 @@ class ProcessTapBackend(AudioBackend):
 
         self._tmpdir = tempfile.mkdtemp(prefix="proctap-")
         self._fifo_path = os.path.join(self._tmpdir, "pcm.fifo")
-        os.mkfifo(self._fifo_path)
+        os.mkfifo(self._fifo_path)  # type: ignore[attr-defined]  # macOS-only module
 
         # Launch via LaunchServices so the helper is its own TCC responsible
         # process (required for Screen-Recording-gated tap content).
