@@ -25,6 +25,28 @@ SAMPLERATE_CONVERTER_TYPES = {
     'fast': 'sinc_fastest',   # Lowest quality, fastest (~0.3-0.5ms estimated)
 }
 
+# --- PCM normalization constants -------------------------------------------
+# Divisors map full-scale signed integer PCM onto the normalized float range
+# [-1.0, 1.0]; each is 2^(bits-1).
+INT16_NORM_DIVISOR = 32768.0        # 2^15
+INT24_NORM_DIVISOR = 8388608.0      # 2^23
+INT32_NORM_DIVISOR = 2147483648.0   # 2^31
+# 24-bit samples stored in the upper 24 bits of an int32 container are 2^8 larger.
+INT24_32_CONTAINER_SCALE = 256.0    # 2^8
+
+# Peak magnitudes used when scaling a normalized float back to integer PCM. Using
+# the max positive value (2^(bits-1) - 1) keeps +1.0 from overflowing the range.
+INT16_PEAK = 32767.0                # 2^15 - 1
+INT24_PEAK = 8388607.0              # 2^23 - 1
+INT32_PEAK = 2147483647.0           # 2^31 - 1
+INT24_32_SHIFT = 256               # place a 24-bit value into the upper bits (int math)
+
+# --- Automatic format detection thresholds ---------------------------------
+FORMAT_DETECTION_MIN_SAMPLES = 100          # samples inspected for a reliable guess
+FORMAT_DETECTION_MIN_BYTES = 400            # need this many bytes (100 float32 samples)
+FORMAT_DETECTION_SIGNAL_THRESHOLD = 100     # int16 |amax| above this => real signal
+FLOAT32_DETECTION_MAX_ABS = 10.0            # plausible upper bound for float PCM |amax|
+
 try:
     from scipy import signal  # type: ignore[import-untyped]
     HAS_SCIPY = True
@@ -151,13 +173,13 @@ class AudioConverter:
         Returns:
             Detected format: SampleFormat.INT16 or SampleFormat.FLOAT32
         """
-        if len(pcm_bytes) < 400:  # Need at least 100 samples for reliable detection
+        if len(pcm_bytes) < FORMAT_DETECTION_MIN_BYTES:
             return self.src_format
 
         try:
             # First try 32-bit float interpretation (most common WASAPI mismatch)
             if len(pcm_bytes) % 4 == 0:
-                sample_count = min(len(pcm_bytes) // 4, 100)
+                sample_count = min(len(pcm_bytes) // 4, FORMAT_DETECTION_MIN_SAMPLES)
                 floats = np.frombuffer(pcm_bytes[:sample_count * 4], dtype=np.float32)
 
                 # Check for NaN/Inf
@@ -167,20 +189,20 @@ class AudioConverter:
                 if not has_nan and not has_inf:
                     max_abs = np.abs(floats).max()
 
-                    # Valid float32 audio is typically in [-1.0, 1.0] but allow up to 10.0
+                    # Valid float32 audio is typically in [-1.0, 1.0] but allow headroom.
                     # Reference: discord_source.py uses 0.0 < max_abs <= 10.0
-                    if 0.0 < max_abs <= 10.0:
+                    if 0.0 < max_abs <= FLOAT32_DETECTION_MAX_ABS:
                         logger.info(f"Auto-detected 32-bit float PCM format (max_abs={max_abs:.6f})")
                         return SampleFormat.FLOAT32
                 else:
                     logger.debug(f"Float32 interpretation invalid (nan={has_nan}, inf={has_inf})")
 
             # Try int16 interpretation
-            sample_count = min(len(pcm_bytes) // 2, 100)
+            sample_count = min(len(pcm_bytes) // 2, FORMAT_DETECTION_MIN_SAMPLES)
             int16_samples = np.frombuffer(pcm_bytes[:sample_count * 2], dtype=np.int16)
             int16_max = np.abs(int16_samples).max()
 
-            if int16_max > 100:  # Has significant signal (>100 to avoid false positives)
+            if int16_max > FORMAT_DETECTION_SIGNAL_THRESHOLD:  # significant signal
                 logger.info(f"Auto-detected 16-bit PCM format (max={int16_max})")
                 return SampleFormat.INT16
 
@@ -248,7 +270,7 @@ class AudioConverter:
         """
         if sample_format == SampleFormat.INT16:
             # 16-bit signed PCM
-            audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / INT16_NORM_DIVISOR
 
         elif sample_format == SampleFormat.INT24:
             # 24-bit signed PCM (3-byte packed) - OPTIMIZATION 1.3: Fully vectorized
@@ -267,17 +289,17 @@ class AudioConverter:
             # Use -16777216 (signed int32 equivalent of 0xFF000000) to avoid overflow
             audio_int32 = np.where(sign_bit != 0, audio_int32 | np.int32(-16777216), audio_int32)
             # Normalize to float32 in [-1.0, 1.0]
-            audio = audio_int32.astype(np.float32) / 8388608.0  # 2^23
+            audio = audio_int32.astype(np.float32) / INT24_NORM_DIVISOR
 
         elif sample_format == SampleFormat.INT24_32:
             # 24-bit in 32-bit container (upper 24 bits used)
             audio_int32 = np.frombuffer(pcm_bytes, dtype=np.int32)
             # Shift right 8 bits to get 24-bit value, then normalize
-            audio = (audio_int32.astype(np.float32) / 256.0) / 8388608.0  # divide by 2^8 then 2^23
+            audio = (audio_int32.astype(np.float32) / INT24_32_CONTAINER_SCALE) / INT24_NORM_DIVISOR
 
         elif sample_format == SampleFormat.INT32:
             # 32-bit signed PCM
-            audio = np.frombuffer(pcm_bytes, dtype=np.int32).astype(np.float32) / 2147483648.0  # 2^31
+            audio = np.frombuffer(pcm_bytes, dtype=np.int32).astype(np.float32) / INT32_NORM_DIVISOR
 
         elif sample_format == SampleFormat.FLOAT32:
             # 32-bit IEEE float (already normalized, typically)
@@ -321,12 +343,12 @@ class AudioConverter:
 
         if sample_format == SampleFormat.INT16:
             # 16-bit signed PCM
-            audio_int = (audio * 32767.0).astype(np.int16)
+            audio_int = (audio * INT16_PEAK).astype(np.int16)
             return cast(bytes, audio_int.tobytes())
 
         elif sample_format == SampleFormat.INT24:
             # 24-bit signed PCM (3-byte packed) - OPTIMIZATION 1.3: Fully vectorized
-            audio_int = (audio * 8388607.0).astype(np.int32)
+            audio_int = (audio * INT24_PEAK).astype(np.int32)
             # Extract 3 bytes from each int32 (little-endian) using vectorized indexing
             num_samples = len(audio_int)
             pcm_bytes = np.empty(num_samples * 3, dtype=np.uint8)
@@ -338,14 +360,14 @@ class AudioConverter:
 
         elif sample_format == SampleFormat.INT24_32:
             # 24-bit in 32-bit container (upper 24 bits)
-            audio_int24 = (audio * 8388607.0).astype(np.int32)
+            audio_int24 = (audio * INT24_PEAK).astype(np.int32)
             # Shift left 8 bits to place in upper 24 bits of 32-bit container
-            audio_int32 = (audio_int24 * 256).astype(np.int32)
+            audio_int32 = (audio_int24 * INT24_32_SHIFT).astype(np.int32)
             return cast(bytes, audio_int32.tobytes())
 
         elif sample_format == SampleFormat.INT32:
             # 32-bit signed PCM
-            audio_int = (audio * 2147483647.0).astype(np.int32)
+            audio_int = (audio * INT32_PEAK).astype(np.int32)
             return cast(bytes, audio_int.tobytes())
 
         elif sample_format == SampleFormat.FLOAT32:

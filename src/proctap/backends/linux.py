@@ -54,6 +54,10 @@ logger = logging.getLogger(__name__)
 # Type alias for audio callback
 AudioCallback = Callable[[bytes, int], None]
 
+# Capture buffering constants
+DEFAULT_QUEUE_DEPTH_FRAMES = 50   # queued chunks; ~500ms at 10ms chunks
+DEFAULT_CHUNK_DURATION_MS = 10    # duration of one captured/queued audio chunk
+
 
 def detect_audio_server() -> str:
     """
@@ -226,11 +230,13 @@ class _PulseCompatStrategy(LinuxAudioStrategy):
         self._remap_source_name: Optional[str] = None
         self._loopback_module_index: Optional[int] = None
         self._original_sink_index: Optional[int] = None
-        self._audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=50)  # ~500ms buffer
+        self._audio_queue: queue.Queue[bytes] = queue.Queue(
+            maxsize=DEFAULT_QUEUE_DEPTH_FRAMES
+        )
         self._capture_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._isolation_mode = "remap"  # "remap" or "monitor" (fallback)
-        self._chunk_duration_ms = 10  # Configurable chunk duration in milliseconds
+        self._chunk_duration_ms = DEFAULT_CHUNK_DURATION_MS
 
     def _import_pulsectl(self) -> None:
         """Import the pulsectl module, raising a helpful error if unavailable."""
