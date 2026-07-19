@@ -18,7 +18,9 @@ SOURCE_FILES = sorted(p.name for p in BACKENDS_DIR.glob("*.py"))
 
 
 def _bare_except_lines(path: pathlib.Path) -> list[int]:
-    tree = ast.parse(path.read_text())
+    # Explicit UTF-8: sources contain non-ASCII comments and would otherwise fail
+    # to decode under Windows' default cp1252 locale encoding.
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     return [
         node.lineno
         for node in ast.walk(tree)
