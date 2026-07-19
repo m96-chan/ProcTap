@@ -26,11 +26,14 @@ from __future__ import annotations
 
 from typing import Optional, Callable, Any
 from abc import ABC, abstractmethod
+import json
 import logging
 import queue
+import shutil
 import threading
 import subprocess
 import os
+import time
 
 from .base import (
     AudioBackend,
@@ -96,6 +99,231 @@ def detect_audio_server() -> str:
     except Exception as e:
         logger.debug(f"Error detecting audio server: {e}")
         return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# pw-link / pw-dump helpers (used by PipeWireStrategy to avoid the
+# sink_input_move + name-based pw-record approach that WirePlumber's session
+# policy interferes with — see GitHub issue #48).
+# ---------------------------------------------------------------------------
+
+_PW_NODE_LOOKUP_RETRIES = 20
+_PW_NODE_LOOKUP_INTERVAL_SEC = 0.05
+
+
+def _pw_dump_capture() -> bytes:
+    """Run ``pw-dump`` and return its raw stdout.
+
+    Returns ``b""`` on any failure (missing binary, non-zero exit, timeout)
+    so callers can fall back to "node not yet visible" without aborting.
+    """
+    try:
+        result = subprocess.run(
+            ["pw-dump"],
+            capture_output=True,
+            timeout=2.0,
+            check=False,
+        )
+        if result.returncode != 0:
+            logger.debug(
+                "pw-dump returned non-zero: rc=%d stderr=%s",
+                result.returncode,
+                result.stderr[:200].decode("utf-8", errors="replace"),
+            )
+            return b""
+        return result.stdout
+    except FileNotFoundError:
+        logger.debug("pw-dump binary not found")
+        return b""
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug(f"pw-dump failed: {e}")
+        return b""
+
+
+def _pw_dump_parse(raw: bytes) -> list[dict[str, Any]]:
+    """Parse ``pw-dump`` output into a list of object dicts.
+
+    Returns an empty list (never raises) on empty/invalid input so
+    consumers degrade to "no match" cleanly.
+    """
+    if not raw:
+        return []
+    try:
+        data: Any = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [obj for obj in data if isinstance(obj, dict)]
+
+
+def _pw_obj_props(obj: dict[str, Any]) -> dict[str, Any]:
+    """Return ``obj['info']['props']`` as a dict, or ``{}`` when absent."""
+    info = obj.get("info")
+    if not isinstance(info, dict):
+        return {}
+    props = info.get("props")
+    if not isinstance(props, dict):
+        return {}
+    return props
+
+
+def _pw_coerce_int(value: Any) -> Optional[int]:
+    """Coerce a pw-dump scalar (often a string) to ``int``; ``None`` on failure."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pw_find_node_id_by_name(
+    dump: list[dict[str, Any]], node_name: str
+) -> Optional[int]:
+    """Return the global node id whose ``node.name`` matches, or ``None``."""
+    for obj in dump:
+        if obj.get("type") != "PipeWire:Interface:Node":
+            continue
+        if _pw_obj_props(obj).get("node.name") == node_name:
+            return _pw_coerce_int(obj.get("id"))
+    return None
+
+
+def _pw_find_stream_node_ids_by_pid(
+    dump: list[dict[str, Any]], pid: int
+) -> list[int]:
+    """Return ids of ``Stream/Output/Audio`` nodes for the given process.
+
+    Some apps (multi-engine games, browsers) register more than one output
+    stream, so this returns every matching node rather than the first hit.
+    """
+    pid_str = str(pid)
+    ids: list[int] = []
+    for obj in dump:
+        if obj.get("type") != "PipeWire:Interface:Node":
+            continue
+        props = _pw_obj_props(obj)
+        media_class = props.get("media.class")
+        if not isinstance(media_class, str):
+            continue
+        if not media_class.startswith("Stream/Output"):
+            continue
+        if str(props.get("application.process.id")) != pid_str:
+            continue
+        node_id = _pw_coerce_int(obj.get("id"))
+        if node_id is not None:
+            ids.append(node_id)
+    return ids
+
+
+def _pw_find_ports(
+    dump: list[dict[str, Any]], node_id: int, direction: str
+) -> dict[str, int]:
+    """Return ``{audio.channel: global port id}`` for the given node + direction.
+
+    ``direction`` is ``"in"`` or ``"out"``. Ports without an ``audio.channel``
+    or a numeric global id are skipped.
+    """
+    ports: dict[str, int] = {}
+    for obj in dump:
+        if obj.get("type") != "PipeWire:Interface:Port":
+            continue
+        props = _pw_obj_props(obj)
+        if _pw_coerce_int(props.get("node.id")) != node_id:
+            continue
+        if props.get("port.direction") != direction:
+            continue
+        channel = props.get("audio.channel")
+        if not isinstance(channel, str):
+            continue
+        port_id = _pw_coerce_int(obj.get("id"))
+        if port_id is None:
+            continue
+        ports[channel] = port_id
+    return ports
+
+
+def _pw_link_already_linked(stderr: str) -> bool:
+    """``pw-link`` returns non-zero + ``File exists`` when the link is already present."""
+    return "File exists" in stderr
+
+
+def _pw_link_ports(out_port_id: int, in_port_id: int) -> bool:
+    """Link one output port to one input port by global port id.
+
+    Returns ``True`` if the link is in place after the call (newly created
+    *or* already existed), ``False`` on any other failure. Logs the outcome
+    so post-mortems can trace which channels were wired.
+    """
+    try:
+        result = subprocess.run(
+            ["pw-link", str(out_port_id), str(in_port_id)],
+            capture_output=True,
+            timeout=2.0,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.error("pw-link binary not found; cannot establish port link")
+        return False
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning(
+            f"pw-link spawn failed (out={out_port_id}, in={in_port_id}): {e}"
+        )
+        return False
+
+    stderr_text = result.stderr.decode("utf-8", errors="replace")
+    if result.returncode == 0:
+        logger.debug(f"pw-link ok: out={out_port_id} -> in={in_port_id}")
+        return True
+    if _pw_link_already_linked(stderr_text):
+        logger.debug(
+            f"pw-link already present: out={out_port_id} -> in={in_port_id}"
+        )
+        return True
+    logger.warning(
+        f"pw-link failed (rc={result.returncode}, out={out_port_id}, "
+        f"in={in_port_id}): {stderr_text.strip()}"
+    )
+    return False
+
+
+def _pw_link_nodes(
+    dump: list[dict[str, Any]],
+    src_node_id: int,
+    src_direction: str,
+    dst_node_id: int,
+    dst_direction: str,
+) -> int:
+    """Link every shared channel between two nodes by global port id.
+
+    Returns the number of channel pairs that ended up linked (newly
+    created or pre-existing).
+    """
+    src_ports = _pw_find_ports(dump, src_node_id, src_direction)
+    dst_ports = _pw_find_ports(dump, dst_node_id, dst_direction)
+    linked = 0
+    for channel, out_port in src_ports.items():
+        in_port = dst_ports.get(channel)
+        if in_port is None:
+            continue
+        if _pw_link_ports(out_port, in_port):
+            linked += 1
+    return linked
+
+
+def _pw_poll_for(probe: Callable[[], Optional[Any]]) -> Optional[Any]:
+    """Spin-call ``probe`` until it returns non-``None`` or the budget expires.
+
+    Used to wait for the tap null-sink and the ``pw-record`` node to become
+    visible in ``pw-dump`` after they are requested.
+    """
+    for _ in range(_PW_NODE_LOOKUP_RETRIES):
+        result = probe()
+        if result is not None:
+            return result
+        time.sleep(_PW_NODE_LOOKUP_INTERVAL_SEC)
+    return None
 
 
 class LinuxAudioStrategy(ABC):
@@ -624,27 +852,24 @@ class PipeWireStrategy(LinuxAudioStrategy):
         self._stream_id: Optional[str] = None
         self._null_sink_index: Optional[int] = None
         self._null_sink_name: Optional[str] = None
-        self._original_sink_index: Optional[int] = None
+        self._recorder_node_name: str = f"proctap_pw_rec_{pid}"
+        self._record_proc: Optional[subprocess.Popen[bytes]] = None
         self._audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=50)  # ~500ms buffer
         self._capture_thread: Optional[threading.Thread] = None
+        self._stderr_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._pulsectl: Any = None  # pulsectl module
         self._chunk_duration_ms = 10  # Configurable chunk duration in milliseconds
 
-        # Check if pw-record is available
-        try:
-            result = subprocess.run(
-                ['which', 'pw-record'],
-                capture_output=True,
-                timeout=1.0
+        # Required CLIs: pw-link (producer + capture-side port links) and
+        # pw-dump (resolve global port ids) are mandatory for the isolation
+        # strategy that survives WirePlumber's session policy.
+        missing = [c for c in ("pw-record", "pw-link", "pw-dump") if shutil.which(c) is None]
+        if missing:
+            raise RuntimeError(
+                f"PipeWire backend requires {missing} on PATH. "
+                "Install 'pipewire' / 'pipewire-utils' (or distro equivalents)."
             )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    "pw-record command not found. "
-                    "Install pipewire-utils package or use PulseAudio backend."
-                )
-        except Exception as e:
-            raise RuntimeError(f"Failed to check for pw-record: {e}") from e
 
         # Import pulsectl for stream management (PipeWire has PulseAudio compatibility)
         try:
@@ -707,188 +932,271 @@ class PipeWireStrategy(LinuxAudioStrategy):
 
     def start_capture(self) -> None:
         """
-        Start capturing audio using PipeWire.
+        Start capturing audio using PipeWire via the pw-link isolation strategy.
 
-        Uses null-sink strategy similar to PulseAudio for isolation.
+        See :meth:`_setup_isolated_capture` for the routing details that make
+        this resilient to WirePlumber's session policy (GitHub #48).
         """
         if self._sink_input_index is None:
             raise RuntimeError("No sink-input found. Call find_process_stream() first.")
 
         try:
-            # Get sink-input details
-            sink_input = self._pulse.sink_input_info(self._sink_input_index)
-            self._original_sink_index = sink_input.sink
-
-            # Use null-sink strategy for isolation
             self._setup_isolated_capture()
             logger.info(f"PipeWire isolated capture started for PID {self._pid}")
-
         except Exception as e:
+            # Best-effort cleanup of any partial state so the caller can retry.
+            try:
+                self._cleanup_isolation_modules()
+            except Exception:  # noqa: BLE001
+                pass
             raise RuntimeError(f"Failed to start PipeWire capture: {e}") from e
 
     def _setup_isolated_capture(self) -> None:
-        """Setup isolated capture using null-sink (same as PulseAudio strategy)."""
-        # Create null-sink
+        """Set up isolated capture by adding extra pw-link subscribers.
+
+        This avoids the ``sink_input_move`` approach (which WirePlumber's
+        session policy reverts) and the name-targeted ``pw-record`` approach
+        (which the session manager redirects to the default sink's monitor
+        in multi-sink environments). Instead:
+
+        1. Load ``module-null-sink`` as a dedicated capture target.
+        2. Spawn ``pw-record --target=0`` with a unique ``node.name`` so its
+           input ports stay unconnected until we explicitly link them.
+        3. From a single ``pw-dump`` snapshot, resolve every relevant
+           node + port by **global id**, then ``pw-link`` two hops:
+
+           a. Producer side: target process's ``Stream/Output/Audio`` nodes
+              → tap null-sink's playback ports. The original route is left
+              intact (no ``sink_input_move``), so the user still hears
+              audio normally and WirePlumber does not revert anything —
+              user-created explicit port links are exempt from session
+              policy.
+           b. Capture side: tap null-sink's monitor ports → recorder's
+              input ports. Without this hop the ``--target=0`` recorder
+              stays unconnected and captures silence.
+        """
+        # Step 1: load the null-sink that will act as our isolation tap.
         sink_name = f"proctap_pw_isolated_{self._pid}"
         try:
             self._null_sink_index = self._pulse.module_load(
                 'module-null-sink',
-                args=f'sink_name={sink_name} '
-                     f'sink_properties=device.description="ProcTap_PipeWire_PID_{self._pid}"'
+                args=(
+                    f'sink_name={sink_name} '
+                    f'sink_properties=device.description="ProcTap_PipeWire_PID_{self._pid}"'
+                ),
             )
             self._null_sink_name = sink_name
-            logger.debug(f"Loaded null-sink: {sink_name} (index: {self._null_sink_index})")
+            logger.debug(
+                f"Loaded null-sink: {sink_name} (module index: {self._null_sink_index})"
+            )
         except Exception as e:
             raise RuntimeError(f"Failed to load null-sink: {e}") from e
 
-        # Move sink-input to null-sink
-        try:
-            sinks = self._pulse.sink_list()
-            target_sink = None
-            for sink in sinks:
-                if sink.name == sink_name:
-                    target_sink = sink
-                    break
-
-            if target_sink is None:
-                raise RuntimeError(f"Could not find created null-sink: {sink_name}")
-
-            self._pulse.sink_input_move(self._sink_input_index, target_sink.index)
-            logger.debug(f"Moved sink-input #{self._sink_input_index} to null-sink #{target_sink.index}")
-        except Exception as e:
-            if self._null_sink_index is not None:
-                try:
-                    self._pulse.module_unload(self._null_sink_index)
-                except:
-                    pass
-            raise RuntimeError(f"Failed to move sink-input: {e}") from e
-
-        # Get monitor source
-        try:
-            sinks = self._pulse.sink_list()
-            null_sink = None
-            for sink in sinks:
-                if sink.name == sink_name:
-                    null_sink = sink
-                    break
-
-            if null_sink is None:
-                raise RuntimeError(f"Could not find null-sink: {sink_name}")
-
-            monitor_source_name = null_sink.monitor_source_name
-            logger.debug(f"Monitor source: {monitor_source_name}")
-        except Exception as e:
-            self._cleanup_isolation_modules()
-            raise RuntimeError(f"Failed to get monitor source: {e}") from e
-
-        # Start capture using pw-record
+        # Step 2: spawn the recorder with auto-connect disabled. It will not
+        # produce any data until we link the capture-side ports below.
         self._stop_event.clear()
-        self._capture_thread = threading.Thread(
-            target=self._capture_worker_pwrecord,
-            args=(monitor_source_name,),
-            daemon=True
-        )
-        self._capture_thread.start()
-
-    def _capture_worker_pwrecord(self, source_name: str) -> None:
-        """
-        Worker thread using pw-record for PipeWire-native capture.
-
-        Args:
-            source_name: Name of the source to capture from
-        """
+        chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
+        chunk_bytes = chunk_frames * self._channels * self._sample_width
+        cmd = [
+            "pw-record",
+            "--target=0",
+            "-P",
+            f"node.name={self._recorder_node_name}",
+            f"--rate={self._sample_rate}",
+            f"--channels={self._channels}",
+            "--format=s16",
+            "-",
+        ]
+        logger.debug(f"Starting pw-record: {' '.join(cmd)}")
         try:
-            # Build pw-record command
-            # Note: pw-record uses different argument format than parec
-            cmd = [
-                'pw-record',
-                '--target', source_name,
-                '--rate', str(self._sample_rate),
-                '--channels', str(self._channels),
-                '--format', 's16',  # 16-bit signed
-                '-',  # Output to stdout
-            ]
-
-            logger.debug(f"Starting pw-record: {' '.join(cmd)}")
-
-            # Calculate chunk size for buffering
-            chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
-            chunk_bytes = chunk_frames * self._channels * self._sample_width
-
-            proc = subprocess.Popen(
+            self._record_proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=chunk_bytes,  # Buffer one chunk to reduce system calls
+                bufsize=chunk_bytes,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to spawn pw-record: {e}") from e
+
+        # Step 3: wait for both nodes to be visible in pw-dump, then resolve
+        # ids and wire the two link hops.
+        try:
+            self._wire_pw_links()
+        except Exception:
+            # Cleanup recorder + null-sink and re-raise so start_capture can
+            # surface the failure to the caller.
+            self._terminate_record_proc()
+            raise
+
+        # Step 4: start drain threads on the (now-linked) recorder pipe.
+        self._capture_thread = threading.Thread(
+            target=self._capture_worker,
+            args=(chunk_bytes,),
+            daemon=True,
+        )
+        self._capture_thread.start()
+        self._stderr_thread = threading.Thread(
+            target=self._stderr_drain_worker,
+            daemon=True,
+        )
+        self._stderr_thread.start()
+
+    def _wire_pw_links(self) -> None:
+        """Resolve node + port ids via ``pw-dump`` and create the two pw-link hops."""
+        tap_node_name = self._null_sink_name
+        rec_node_name = self._recorder_node_name
+        assert tap_node_name is not None
+
+        def probe_nodes() -> Optional[tuple[list[dict[str, Any]], int, int]]:
+            dump = _pw_dump_parse(_pw_dump_capture())
+            tap_id = _pw_find_node_id_by_name(dump, tap_node_name)
+            rec_id = _pw_find_node_id_by_name(dump, rec_node_name)
+            if tap_id is None or rec_id is None:
+                return None
+            return dump, tap_id, rec_id
+
+        resolved = _pw_poll_for(probe_nodes)
+        if resolved is None:
+            raise RuntimeError(
+                "Timed out waiting for tap null-sink / pw-record node to "
+                "appear in pw-dump. Is PipeWire running?"
+            )
+        dump, tap_node_id, rec_node_id = resolved
+
+        # Producer side: target app's output stream(s) -> tap input ports.
+        producer_node_ids = _pw_find_stream_node_ids_by_pid(dump, self._pid)
+        if not producer_node_ids:
+            # The PID's audio stream may not be visible yet (app silent at
+            # start). Log and continue — the capture-side link below still
+            # delivers audio once the producer attaches. A future refinement
+            # could listen to PipeWire registry events and re-link, but the
+            # most common case (app already playing) is covered.
+            logger.warning(
+                f"No Stream/Output/Audio node found for PID {self._pid} in "
+                "pw-dump; capture may be silent until the app starts playing"
+            )
+        else:
+            total = 0
+            for node_id in producer_node_ids:
+                total += _pw_link_nodes(dump, node_id, "out", tap_node_id, "in")
+            logger.info(
+                f"Linked {total} channel(s) from PID {self._pid} producer node(s) "
+                f"{producer_node_ids} to tap null-sink (id={tap_node_id})"
             )
 
+        # Capture side: tap monitor ports -> recorder input ports.
+        captured = _pw_link_nodes(dump, tap_node_id, "out", rec_node_id, "in")
+        if captured == 0:
+            raise RuntimeError(
+                "pw-link could not connect tap monitor to pw-record input; "
+                "the recorder would capture silence."
+            )
+        logger.info(
+            f"Linked {captured} channel(s) from tap monitor (id={tap_node_id}) "
+            f"to pw-record input (id={rec_node_id})"
+        )
+
+    def _capture_worker(self, chunk_bytes: int) -> None:
+        """Drain raw PCM from the recorder subprocess into the audio queue."""
+        proc = self._record_proc
+        if proc is None or proc.stdout is None:
+            logger.error("Capture worker started without a running recorder process")
+            return
+        try:
             while not self._stop_event.is_set():
-                try:
-                    if proc.stdout is None:
-                        break
-                    chunk = proc.stdout.read(chunk_bytes)
-                    if not chunk:
-                        break
-
-                    if len(chunk) == chunk_bytes:
-                        try:
-                            self._audio_queue.put_nowait(chunk)
-                        except queue.Full:
-                            # Drop old frames
-                            try:
-                                self._audio_queue.get_nowait()
-                                self._audio_queue.put_nowait(chunk)
-                            except:
-                                pass
-
-                except Exception as e:
-                    logger.error(f"Error reading audio: {e}")
+                chunk = proc.stdout.read(chunk_bytes)
+                if not chunk:
                     break
-
-            # Clean up
-            proc.terminate()
-            try:
-                proc.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-
+                if len(chunk) != chunk_bytes:
+                    # Tail bytes on shutdown — drop rather than feed a short frame.
+                    continue
+                try:
+                    self._audio_queue.put_nowait(chunk)
+                except queue.Full:
+                    # Bounded queue: drop the oldest frame and try once more.
+                    try:
+                        self._audio_queue.get_nowait()
+                        self._audio_queue.put_nowait(chunk)
+                    except (queue.Empty, queue.Full):
+                        pass
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"PipeWire capture worker error: {e}")
+        finally:
             logger.debug("PipeWire capture worker stopped")
 
-        except Exception as e:
-            logger.error(f"PipeWire capture worker error: {e}")
+    def _stderr_drain_worker(self) -> None:
+        """Forward ``pw-record`` stderr line-by-line so failures are visible."""
+        proc = self._record_proc
+        if proc is None or proc.stderr is None:
+            return
+        try:
+            for line in iter(proc.stderr.readline, b""):
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    logger.debug(f"pw-record stderr | {text}")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _terminate_record_proc(self) -> None:
+        """Stop the pw-record subprocess if running."""
+        proc = self._record_proc
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        pass
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Error terminating pw-record: {e}")
+        finally:
+            self._record_proc = None
 
     def stop_capture(self) -> None:
-        """Stop capturing audio and clean up."""
+        """Stop capturing audio and tear down the isolation routing."""
         self._stop_event.set()
+
+        # Terminate the recorder first so its stdout closes and the drain
+        # thread exits its blocking read.
+        self._terminate_record_proc()
 
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=2.0)
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=1.0)
 
         self._cleanup_isolation_modules()
         logger.info("PipeWire audio capture stopped")
 
     def _cleanup_isolation_modules(self) -> None:
-        """Clean up PipeWire/PulseAudio modules."""
+        """Tear down the tap null-sink.
+
+        Producer-side and capture-side ``pw-link`` connections do not need
+        explicit teardown: PipeWire garbage-collects every link attached to
+        the null-sink ports as soon as the null-sink module is unloaded,
+        and the recorder's ports vanish when its subprocess exits. We never
+        moved the original sink-input (the whole point of the pw-link
+        approach), so there is nothing to restore on the user's audio path.
+        """
+        # Make sure the recorder is dead even if stop_capture() did not run.
+        self._terminate_record_proc()
+
         if not self._pulse:
             return
 
-        # Restore sink-input
-        if (self._sink_input_index is not None and
-            self._original_sink_index is not None):
-            try:
-                sink_input = self._pulse.sink_input_info(self._sink_input_index)
-                if sink_input:
-                    self._pulse.sink_input_move(self._sink_input_index, self._original_sink_index)
-                    logger.debug(f"Restored sink-input to original sink")
-            except Exception as e:
-                logger.debug(f"Could not restore sink-input: {e}")
-
-        # Unload null-sink
         if self._null_sink_index is not None:
             try:
                 self._pulse.module_unload(self._null_sink_index)
-                logger.debug(f"Unloaded null-sink module")
-            except Exception as e:
+                logger.debug("Unloaded null-sink module")
+            except Exception as e:  # noqa: BLE001
                 logger.warning(f"Failed to unload null-sink: {e}")
             finally:
                 self._null_sink_index = None
