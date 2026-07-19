@@ -115,7 +115,8 @@ class WindowsBackend(AudioBackend):
 
         Returns:
             PCM audio data as bytes in standard format (48kHz/2ch/float32),
-            or empty bytes if no data available
+            or None if no data is available or the chunk could not be converted.
+            See AudioBackend.read for the shared sentinel convention.
         """
         data = self._native.read()
 
@@ -124,8 +125,9 @@ class WindowsBackend(AudioBackend):
             try:
                 data = self._converter.convert(data)
             except Exception as e:
+                # Recoverable: log and report "no usable data" (None), never b''.
                 logger.error(f"Error converting audio format: {e}")
-                return b''
+                return None
 
         return data
 

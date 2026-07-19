@@ -75,7 +75,17 @@ class AudioBackend(ABC):
         Read audio data from the capture buffer.
 
         Returns:
-            PCM audio data as bytes, or None if no data is available
+            PCM audio data as bytes, or None if no data is available.
+
+        Sentinel convention (consistent across all backends):
+            - None            -> no usable data right now: nothing buffered, or a
+                                 chunk was logged-and-skipped after a recoverable
+                                 error (e.g. format conversion failed).
+            - non-empty bytes -> a real audio chunk in standard format.
+            - b'' is never returned to signal an error.
+
+        Unrecoverable errors should be raised as exceptions, not encoded in the
+        return value.
 
         Note:
             This method should not block for extended periods.
