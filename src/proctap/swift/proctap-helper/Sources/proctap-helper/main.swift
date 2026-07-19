@@ -41,19 +41,22 @@ func requestMicrophonePermission() -> Bool {
 
 @available(macOS 14.2, *)
 func checkScreenRecordingPermission() -> Bool {
-    // Screen Recording permission is required to access other processes' audio
-    // We check this by attempting to get the list of windows
-    let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+    // Screen Recording permission gates Process Tap *audio content* (a tap without
+    // it is created fine but delivers silence). Use the real preflight API, not
+    // CGWindowListCopyWindowInfo (which returns window metadata even WITHOUT the
+    // permission and so gives a false positive).
+    let has = CGPreflightScreenCaptureAccess()
+    fputs("Screen Recording preflight: \(has)\n", stderr)
+    if has { return true }
 
-    if let windows = windowList, windows.count > 0 {
-        fputs("Screen Recording permission: Granted\n", stderr)
-        return true
-    } else {
-        fputs("ERROR: Screen Recording permission required\n", stderr)
-        fputs("Please grant Screen Recording access in System Settings > Privacy & Security > Screen Recording\n", stderr)
-        fputs("This permission is needed to access audio from other processes.\n", stderr)
-        return false
+    // Not granted: ask the system to register/prompt this binary.
+    let granted = CGRequestScreenCaptureAccess()
+    fputs("Screen Recording request result: \(granted)\n", stderr)
+    if !granted {
+        fputs("ERROR: Screen Recording permission required. Enable it for this binary in\n", stderr)
+        fputs("System Settings > Privacy & Security > Screen Recording, then relaunch.\n", stderr)
     }
+    return granted
 }
 
 @available(macOS 14.2, *)
@@ -147,6 +150,21 @@ struct ProcTapHelper {
             exit(1)
         }
 
+        // Optional 2nd arg: output file path. Lets the helper be launched via
+        // LaunchServices (`open`) — which can't pipe stdout — so it runs as its
+        // own TCC responsible process. PCM is written here instead of stdout.
+        if args.count >= 3 {
+            let outPath = args[2]
+            // When launched via `open`, stderr is detached; mirror it to a log file.
+            _ = freopen(outPath + ".log", "w", stderr)
+            setvbuf(stderr, nil, _IONBF, 0)  // unbuffered so the log is live
+            if freopen(outPath, "wb", stdout) == nil {
+                fputs("Error: cannot open output file \(outPath)\n", stderr)
+                exit(1)
+            }
+            fputs("Writing PCM to file: \(outPath)\n", stderr)
+        }
+
         fputs("ProcTap Helper starting for PID \(pid)\n", stderr)
 
         // Check and request all required permissions
@@ -161,6 +179,18 @@ struct ProcTapHelper {
         }
 
         fputs("Found process audio object: \(processObjectID)\n", stderr)
+
+        // DIAGNOSTIC: is the tapped process actually rendering output audio right now?
+        var runAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningOutput,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var isRunningOut: UInt32 = 0
+        var runSize = UInt32(MemoryLayout<UInt32>.size)
+        let runStatus = AudioObjectGetPropertyData(
+            processObjectID, &runAddr, 0, nil, &runSize, &isRunningOut)
+        fputs("Process isRunningOutput=\(isRunningOut) (status=\(runStatus))\n", stderr)
 
         // CATapDescription is a public class since macOS 14.4. Construct it
         // directly instead of via fragile Objective-C runtime calls (the old

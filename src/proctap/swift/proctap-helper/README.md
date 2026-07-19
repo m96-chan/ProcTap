@@ -55,18 +55,38 @@ With a Developer ID signature these fixes let the full pipeline run on Apple
 Silicon **without disabling SIP or AMFI**: translate-PID → Process Tap →
 Aggregate Device → IOProc streams PCM to stdout at 48 kHz/2 ch/float32.
 
-## Verifying real audio content (interactive)
+## Permissions — the key requirement
 
-Automated/headless runs stream buffers at the correct rate but may capture
-silence if the OS isn't actually rendering the target's audio in that session.
-Verify from a normal Terminal while real audio plays:
+**Screen Recording permission gates the tapped audio content**, and it must be
+granted to the *responsible process* that runs the helper. A tap created without
+it is returned successfully but delivers **silence** (not an error).
+
+`CGPreflightScreenCaptureAccess()` reports the true state (unlike
+`CGWindowListCopyWindowInfo`, which returns window metadata even without the
+permission — a false positive). The simplest way to give the helper its own TCC
+identity is to launch it via LaunchServices (`open`), which also registers it in
+System Settings › Privacy & Security › Screen Recording:
 
 ```bash
-APP=".build/$(uname -m)-apple-macosx/release/proctap-helper.app/Contents/MacOS/proctap-helper"
-# Play something audible (Music.app, a browser video, etc.), find its PID, then:
-"$APP" <PID> > /tmp/cap.f32
-# Convert float32 PCM -> WAV and listen:
-ffmpeg -f f32le -ar 48000 -ac 2 -i /tmp/cap.f32 /tmp/cap.wav && afplay /tmp/cap.wav
+APP_BUNDLE=".build/$(uname -m)-apple-macosx/release/proctap-helper.app"
+open "$APP_BUNDLE" --args <PID> /tmp/cap.f32     # 2nd arg = output file (open can't pipe stdout)
+# First run registers the helper under Screen Recording; enable it there, then re-run.
 ```
 
-Grant the Microphone + Screen Recording prompts the first time.
+When exec'd directly (piping stdout) the helper runs under the parent's TCC
+identity; that inherits the parent's grants for the *check* but the tap content
+stays silent unless the responsible process truly holds Screen Recording.
+
+## Verifying real audio content
+
+Verified working on macOS 15.6 / Apple Silicon: capturing Chrome's audio-service
+process (YouTube) yields real stereo audio at 44.1 kHz/float32.
+
+```bash
+# Chrome routes all tab audio through its AudioService process:
+PID=$(pgrep -f "audio.mojom.AudioService" | head -1)
+open "$APP_BUNDLE" --args "$PID" /tmp/cap.f32     # let audio play a few seconds
+pkill -f proctap-helper
+# Tap format is 44.1 kHz / 2 ch / float32:
+ffmpeg -f f32le -ar 44100 -ac 2 -i /tmp/cap.f32 /tmp/cap.wav -y && afplay /tmp/cap.wav
+```
