@@ -12,7 +12,7 @@ All backends MUST convert audio to this standard format:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Literal, Optional
 import numpy as np
 
 
@@ -22,6 +22,10 @@ STANDARD_CHANNELS = 2
 STANDARD_FORMAT = 'float32'
 STANDARD_DTYPE = np.float32
 STANDARD_SAMPLE_WIDTH = 4  # bytes (32-bit float)
+
+# Canonical resample quality modes. Defined here (a dependency-free module that
+# every backend already imports) so all modules share a single source of truth.
+ResampleQuality = Literal['best', 'medium', 'fast']
 
 
 class AudioBackend(ABC):
@@ -71,7 +75,17 @@ class AudioBackend(ABC):
         Read audio data from the capture buffer.
 
         Returns:
-            PCM audio data as bytes, or None if no data is available
+            PCM audio data as bytes, or None if no data is available.
+
+        Sentinel convention (consistent across all backends):
+            - None            -> no usable data right now: nothing buffered, or a
+                                 chunk was logged-and-skipped after a recoverable
+                                 error (e.g. format conversion failed).
+            - non-empty bytes -> a real audio chunk in standard format.
+            - b'' is never returned to signal an error.
+
+        Unrecoverable errors should be raised as exceptions, not encoded in the
+        return value.
 
         Note:
             This method should not block for extended periods.

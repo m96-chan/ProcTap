@@ -54,6 +54,10 @@ logger = logging.getLogger(__name__)
 # Type alias for audio callback
 AudioCallback = Callable[[bytes, int], None]
 
+# Capture buffering constants
+DEFAULT_QUEUE_DEPTH_FRAMES = 50   # queued chunks; ~500ms at 10ms chunks
+DEFAULT_CHUNK_DURATION_MS = 10    # duration of one captured/queued audio chunk
+
 
 def detect_audio_server() -> str:
     """
@@ -104,6 +108,18 @@ class LinuxAudioStrategy(ABC):
 
     Allows switching between PulseAudio and PipeWire implementations.
     """
+
+    def __init__(
+        self, pid: int, sample_rate: int, channels: int, sample_width: int
+    ) -> None:
+        """
+        Every strategy is constructed with the target PID and capture format.
+
+        This only declares the shared constructor contract; concrete subclasses
+        override it and may supply their own sensible defaults for the format
+        arguments.
+        """
+        ...
 
     @abstractmethod
     def connect(self) -> None:
@@ -162,30 +178,42 @@ class LinuxAudioStrategy(ABC):
         pass
 
 
-class PulseAudioStrategy(LinuxAudioStrategy):
+class _PulseCompatStrategy(LinuxAudioStrategy):
     """
-    PulseAudio-based audio capture strategy.
+    Shared base for strategies that drive capture through the PulseAudio API
+    (or PipeWire's PulseAudio compatibility layer) using ``pulsectl``.
 
-    Uses pulsectl library to interact with PulseAudio server.
-    Works on systems with PulseAudio or PipeWire (via pulseaudio-compat layer).
+    Both PulseAudio and PipeWire isolate a process by creating a temporary
+    null-sink, moving the target sink-input onto it and recording the null-sink's
+    monitor source. The only real differences between the two are cosmetic
+    (client name, sink names, log labels) and the external recorder invoked by
+    :meth:`_build_capture_command` (``parec`` vs ``pw-record``). Everything else
+    lives here so bug fixes apply to both backends at once.
+
+    Subclasses customise behaviour via the class attributes below and by
+    implementing :meth:`_build_capture_command`.
     """
 
-    def __init__(
-        self,
-        pid: int,
-        sample_rate: int = 44100,
-        channels: int = 2,
-        sample_width: int = 2,
+    # --- Subclass-provided identity / labels -------------------------------
+    _client_name: str = "proctap"
+    _server_short: str = "PulseAudio"
+    _connect_success_log: str = "Connected to PulseAudio server"
+    _connect_failure_prefix: str = "Failed to connect to PulseAudio server"
+    _connect_failure_hint: str = (
+        "Make sure PulseAudio or PipeWire (with pulseaudio-compat) is running."
+    )
+    _sink_name_prefix: str = "proctap_isolated"
+    _sink_description_prefix: str = "ProcTap_Isolated_PID"
+    _capture_error_label: str = "Failed to start audio capture"
+    _pulsectl_error_msg: str = (
+        "pulsectl library is required for Linux audio capture. "
+        "Install it with: pip install pulsectl"
+    )
+
+    def _init_common(
+        self, pid: int, sample_rate: int, channels: int, sample_width: int
     ) -> None:
-        """
-        Initialize PulseAudio strategy.
-
-        Args:
-            pid: Target process ID
-            sample_rate: Sample rate in Hz (default: 44100)
-            channels: Number of channels (default: 2 for stereo)
-            sample_width: Bytes per sample (default: 2 for 16-bit)
-        """
+        """Initialise the fields shared by every PulseAudio-compatible strategy."""
         self._pid = pid
         self._sample_rate = sample_rate
         self._channels = channels
@@ -193,45 +221,44 @@ class PulseAudioStrategy(LinuxAudioStrategy):
         self._bits_per_sample = sample_width * 8
 
         self._pulse: Any = None  # pulsectl.Pulse instance
+        self._pulsectl: Any = None  # pulsectl module
         self._sink_input_index: Optional[int] = None
+        self._stream_id: Optional[str] = None
         self._null_sink_index: Optional[int] = None
         self._null_sink_name: Optional[str] = None
         self._remap_source_index: Optional[int] = None
         self._remap_source_name: Optional[str] = None
         self._loopback_module_index: Optional[int] = None
         self._original_sink_index: Optional[int] = None
-        self._capture_stream = None
-        self._audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=50)  # ~500ms buffer
+        self._audio_queue: queue.Queue[bytes] = queue.Queue(
+            maxsize=DEFAULT_QUEUE_DEPTH_FRAMES
+        )
         self._capture_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._isolation_mode = "remap"  # "remap" or "monitor" (fallback)
-        self._chunk_duration_ms = 10  # Configurable chunk duration in milliseconds
+        self._chunk_duration_ms = DEFAULT_CHUNK_DURATION_MS
 
-        # Try to import pulsectl
-        self._pulsectl: Any = None  # pulsectl module
+    def _import_pulsectl(self) -> None:
+        """Import the pulsectl module, raising a helpful error if unavailable."""
         try:
             import pulsectl
             self._pulsectl = pulsectl
         except ImportError as e:
-            raise RuntimeError(
-                "pulsectl library is required for Linux audio capture. "
-                "Install it with: pip install pulsectl"
-            ) from e
+            raise RuntimeError(self._pulsectl_error_msg) from e
 
     def connect(self) -> None:
-        """Connect to PulseAudio server."""
+        """Connect to the audio server via the PulseAudio API."""
         try:
-            self._pulse = self._pulsectl.Pulse('proctap')
-            logger.info("Connected to PulseAudio server")
+            self._pulse = self._pulsectl.Pulse(self._client_name)
+            logger.info(self._connect_success_log)
         except Exception as e:
             raise RuntimeError(
-                f"Failed to connect to PulseAudio server: {e}. "
-                "Make sure PulseAudio or PipeWire (with pulseaudio-compat) is running."
+                f"{self._connect_failure_prefix}: {e}. {self._connect_failure_hint}"
             ) from e
 
     def find_process_stream(self, pid: int) -> bool:
         """
-        Find sink-input for the target process.
+        Find the sink-input for the target process.
 
         Args:
             pid: Process ID to find
@@ -240,10 +267,12 @@ class PulseAudioStrategy(LinuxAudioStrategy):
             True if stream found, False otherwise
 
         Raises:
-            RuntimeError: If not connected to PulseAudio
+            RuntimeError: If not connected
         """
         if self._pulse is None:
-            raise RuntimeError("Not connected to PulseAudio. Call connect() first.")
+            raise RuntimeError(
+                f"Not connected to {self._server_short}. Call connect() first."
+            )
 
         try:
             sink_inputs = self._pulse.sink_input_list()
@@ -254,6 +283,7 @@ class PulseAudioStrategy(LinuxAudioStrategy):
                 process_id_str = sink_input.proplist.get('application.process.id')
                 if process_id_str and process_id_str == str(pid):
                     self._sink_input_index = sink_input.index
+                    self._note_stream(sink_input)
                     logger.info(
                         f"Found sink-input #{sink_input.index} for PID {pid}: "
                         f"{sink_input.proplist.get('application.name', 'Unknown')}"
@@ -267,12 +297,15 @@ class PulseAudioStrategy(LinuxAudioStrategy):
             logger.error(f"Error finding process stream: {e}")
             return False
 
+    def _note_stream(self, sink_input: Any) -> None:
+        """Hook for subclasses to record extra stream metadata (no-op by default)."""
+
     def start_capture(self) -> None:
         """
         Start capturing audio from the target stream.
 
-        Uses module-remap-source to create an isolated audio source for the target
-        sink-input. Falls back to monitor source capture if isolation fails.
+        Creates an isolated capture using the null-sink strategy. Subclasses
+        decide what happens when isolation fails via :meth:`_handle_isolation_failure`.
 
         Raises:
             RuntimeError: If sink-input not found or capture fails to start
@@ -287,39 +320,49 @@ class PulseAudioStrategy(LinuxAudioStrategy):
             sink_input = self._pulse.sink_input_info(self._sink_input_index)
             self._original_sink_index = sink_input.sink
 
-            # Try to create isolated capture using module-remap-source
             try:
                 self._setup_isolated_capture()
                 logger.info(f"Using isolated capture mode for PID {self._pid}")
             except Exception as e:
-                logger.warning(
-                    f"Failed to setup isolated capture, falling back to monitor mode: {e}"
-                )
-                self._isolation_mode = "monitor"
-                self._setup_monitor_capture()
+                self._handle_isolation_failure(e)
 
         except Exception as e:
-            raise RuntimeError(f"Failed to start audio capture: {e}") from e
+            raise RuntimeError(f"{self._capture_error_label}: {e}") from e
+
+    def _handle_isolation_failure(self, exc: Exception) -> None:
+        """
+        Decide what to do when isolated capture setup fails.
+
+        The default re-raises (no fallback). PulseAudio overrides this to fall
+        back to whole-sink monitor capture.
+        """
+        raise exc
+
+    def _find_sink_by_name(self, sink_name: str) -> Any:
+        """Return the sink with the given name, or None if not present."""
+        for sink in self._pulse.sink_list():
+            if sink.name == sink_name:
+                return sink
+        return None
 
     def _setup_isolated_capture(self) -> None:
         """
-        Setup isolated audio capture using null-sink strategy.
+        Setup isolated audio capture using the null-sink strategy.
 
-        Strategy:
         1. Create a null-sink as a temporary destination
         2. Move the sink-input to the null-sink
         3. Get the null-sink's monitor source
-        4. Capture from the monitor source (which now has only our target app's audio)
-
-        This provides true per-process isolation.
+        4. Capture from the monitor source (now carrying only our target's audio)
         """
+        sink_name = f"{self._sink_name_prefix}_{self._pid}"
+        description = f"{self._sink_description_prefix}_{self._pid}"
+
         # Step 1: Create a null-sink
-        sink_name = f"proctap_isolated_{self._pid}"
         try:
             self._null_sink_index = self._pulse.module_load(
                 'module-null-sink',
                 args=f'sink_name={sink_name} '
-                     f'sink_properties=device.description="ProcTap_Isolated_PID_{self._pid}"'
+                     f'sink_properties=device.description="{description}"'
             )
             self._null_sink_name = sink_name
             logger.debug(f"Loaded null-sink: {sink_name} (index: {self._null_sink_index})")
@@ -328,18 +371,10 @@ class PulseAudioStrategy(LinuxAudioStrategy):
 
         # Step 2: Move sink-input to the null-sink
         try:
-            # Get the actual sink object by name
-            sinks = self._pulse.sink_list()
-            target_sink = None
-            for sink in sinks:
-                if sink.name == sink_name:
-                    target_sink = sink
-                    break
-
+            target_sink = self._find_sink_by_name(sink_name)
             if target_sink is None:
                 raise RuntimeError(f"Could not find created null-sink: {sink_name}")
 
-            # Move the sink-input
             self._pulse.sink_input_move(self._sink_input_index, target_sink.index)
             logger.debug(f"Moved sink-input #{self._sink_input_index} to null-sink #{target_sink.index}")
         except Exception as e:
@@ -347,19 +382,13 @@ class PulseAudioStrategy(LinuxAudioStrategy):
             if self._null_sink_index is not None:
                 try:
                     self._pulse.module_unload(self._null_sink_index)
-                except:
-                    pass
-            raise RuntimeError(f"Failed to move sink-input to null-sink: {e}") from e
+                except Exception as unload_err:
+                    logger.debug(f"Failed to unload null-sink during cleanup: {unload_err}")
+            raise RuntimeError(f"Failed to move sink-input: {e}") from e
 
         # Step 3: Get the null-sink's monitor source
         try:
-            sinks = self._pulse.sink_list()
-            null_sink = None
-            for sink in sinks:
-                if sink.name == sink_name:
-                    null_sink = sink
-                    break
-
+            null_sink = self._find_sink_by_name(sink_name)
             if null_sink is None:
                 raise RuntimeError(f"Could not find null-sink after creation: {sink_name}")
 
@@ -370,7 +399,6 @@ class PulseAudioStrategy(LinuxAudioStrategy):
             raise RuntimeError(f"Failed to get monitor source: {e}") from e
 
         # Step 4: Start capture from the monitor source
-        # The monitor source now contains ONLY audio from our target process
         self._stop_event.clear()
         self._capture_thread = threading.Thread(
             target=self._capture_worker,
@@ -381,65 +409,16 @@ class PulseAudioStrategy(LinuxAudioStrategy):
 
         logger.info(f"Isolated audio capture started for PID {self._pid}")
 
-    def _setup_monitor_capture(self) -> None:
-        """
-        Setup fallback monitor source capture.
-
-        This captures from the entire sink monitor (not isolated).
-        Used when isolated capture fails.
-        """
-        if self._original_sink_index is None:
-            raise RuntimeError("Original sink index not set")
-
-        # Get monitor source name
-        sink_info = self._pulse.sink_info(self._original_sink_index)
-        monitor_source = sink_info.monitor_source_name
-
-        logger.info(
-            f"Using monitor capture from sink {self._original_sink_index} "
-            f"(monitor: {monitor_source})"
-        )
-        logger.warning(
-            "Monitor mode captures ALL audio from the sink, not just the target process. "
-            "This fallback is used when isolated capture fails."
-        )
-
-        # Start capture thread
-        self._stop_event.clear()
-        self._capture_thread = threading.Thread(
-            target=self._capture_worker,
-            args=(monitor_source,),
-            daemon=True
-        )
-        self._capture_thread.start()
-
-        logger.info("Monitor audio capture started")
-
     def _capture_worker(self, source_name: str) -> None:
         """
-        Worker thread that captures audio from PulseAudio.
+        Worker thread that records ``source_name`` into the audio queue.
 
-        Args:
-            source_name: Name of the source to capture from
+        The recorder command is backend-specific (:meth:`_build_capture_command`);
+        the read loop, chunking and back-pressure handling are shared.
         """
         try:
-            # Create a simple recorder using pulsectl
-            # Note: This is a simplified implementation
-            # For production, we'd need more sophisticated stream handling
-
-            import subprocess
-
-            # Use parec (PulseAudio recorder) to capture raw PCM
-            cmd = [
-                'parec',
-                '--device', source_name,
-                '--rate', str(self._sample_rate),
-                '--channels', str(self._channels),
-                '--format', 's16le',  # 16-bit signed little-endian
-                '--raw'
-            ]
-
-            logger.debug(f"Starting parec: {' '.join(cmd)}")
+            cmd = self._build_capture_command(source_name)
+            logger.debug(f"Starting capture: {' '.join(cmd)}")
 
             # Calculate chunk size for buffering
             chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
@@ -468,7 +447,8 @@ class PulseAudioStrategy(LinuxAudioStrategy):
                             try:
                                 self._audio_queue.get_nowait()
                                 self._audio_queue.put_nowait(chunk)
-                            except:
+                            except Exception:
+                                # Best-effort drop; racing consumer emptied it, etc.
                                 pass
 
                 except Exception as e:
@@ -487,8 +467,12 @@ class PulseAudioStrategy(LinuxAudioStrategy):
         except Exception as e:
             logger.error(f"Capture worker error: {e}")
 
+    def _build_capture_command(self, source_name: str) -> list[str]:
+        """Return the recorder command line used to capture ``source_name``."""
+        raise NotImplementedError
+
     def _cleanup_isolation_modules(self) -> None:
-        """Clean up PulseAudio modules created for isolation."""
+        """Clean up modules created for isolation and restore audio routing."""
         if not self._pulse:
             return
 
@@ -541,13 +525,12 @@ class PulseAudioStrategy(LinuxAudioStrategy):
                 self._loopback_module_index = None
 
     def stop_capture(self) -> None:
-        """Stop capturing audio and clean up PulseAudio modules."""
+        """Stop capturing audio and clean up modules."""
         self._stop_event.set()
 
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=2.0)
 
-        # Clean up isolation modules
         self._cleanup_isolation_modules()
 
         logger.info("Audio capture stopped")
@@ -574,7 +557,7 @@ class PulseAudioStrategy(LinuxAudioStrategy):
         if self._pulse:
             self._pulse.close()
             self._pulse = None
-            logger.debug("Closed PulseAudio connection")
+            logger.debug("Closed audio server connection")
 
     def get_format(self) -> dict[str, int | str]:
         """Get audio format information."""
@@ -585,7 +568,101 @@ class PulseAudioStrategy(LinuxAudioStrategy):
         }
 
 
-class PipeWireStrategy(LinuxAudioStrategy):
+class PulseAudioStrategy(_PulseCompatStrategy):
+    """
+    PulseAudio-based audio capture strategy.
+
+    Uses pulsectl library to interact with PulseAudio server.
+    Works on systems with PulseAudio or PipeWire (via pulseaudio-compat layer).
+    Captures the isolated monitor source with ``parec`` and, unlike PipeWire,
+    falls back to whole-sink monitor capture when isolation fails.
+    """
+
+    _client_name = "proctap"
+    _server_short = "PulseAudio"
+    _connect_success_log = "Connected to PulseAudio server"
+    _connect_failure_prefix = "Failed to connect to PulseAudio server"
+    _connect_failure_hint = (
+        "Make sure PulseAudio or PipeWire (with pulseaudio-compat) is running."
+    )
+    _sink_name_prefix = "proctap_isolated"
+    _sink_description_prefix = "ProcTap_Isolated_PID"
+    _capture_error_label = "Failed to start audio capture"
+
+    def __init__(
+        self,
+        pid: int,
+        sample_rate: int = 44100,
+        channels: int = 2,
+        sample_width: int = 2,
+    ) -> None:
+        """
+        Initialize PulseAudio strategy.
+
+        Args:
+            pid: Target process ID
+            sample_rate: Sample rate in Hz (default: 44100)
+            channels: Number of channels (default: 2 for stereo)
+            sample_width: Bytes per sample (default: 2 for 16-bit)
+        """
+        self._init_common(pid, sample_rate, channels, sample_width)
+        self._capture_stream = None
+        self._import_pulsectl()
+
+    def _build_capture_command(self, source_name: str) -> list[str]:
+        # Use parec (PulseAudio recorder) to capture raw PCM
+        return [
+            'parec',
+            '--device', source_name,
+            '--rate', str(self._sample_rate),
+            '--channels', str(self._channels),
+            '--format', 's16le',  # 16-bit signed little-endian
+            '--raw',
+        ]
+
+    def _handle_isolation_failure(self, exc: Exception) -> None:
+        logger.warning(
+            f"Failed to setup isolated capture, falling back to monitor mode: {exc}"
+        )
+        self._isolation_mode = "monitor"
+        self._setup_monitor_capture()
+
+    def _setup_monitor_capture(self) -> None:
+        """
+        Setup fallback monitor source capture.
+
+        This captures from the entire sink monitor (not isolated).
+        Used when isolated capture fails.
+        """
+        if self._original_sink_index is None:
+            raise RuntimeError("Original sink index not set")
+
+        # Get monitor source name
+        sink_info = self._pulse.sink_info(self._original_sink_index)
+        monitor_source = sink_info.monitor_source_name
+
+        logger.info(
+            f"Using monitor capture from sink {self._original_sink_index} "
+            f"(monitor: {monitor_source})"
+        )
+        logger.warning(
+            "Monitor mode captures ALL audio from the sink, not just the target process. "
+            "This fallback is used when isolated capture fails."
+        )
+
+        # Start capture thread
+        self._stop_event.clear()
+        self._capture_thread = threading.Thread(
+            target=self._capture_worker,
+            args=(monitor_source,),
+            daemon=True
+        )
+        self._capture_thread.start()
+
+        logger.info("Monitor audio capture started")
+
+
+class PipeWireStrategy(_PulseCompatStrategy):
     """
     PipeWire-based audio capture strategy using pw-record.
 
@@ -596,6 +673,19 @@ class PipeWireStrategy(LinuxAudioStrategy):
     Note: Falls back to PulseAudio compatibility layer (pulsectl)
     for stream enumeration and management.
     """
+
+    _client_name = "proctap-pipewire"
+    _server_short = "PipeWire"
+    _connect_success_log = "Connected to PipeWire (via PulseAudio compatibility layer)"
+    _connect_failure_prefix = "Failed to connect to PipeWire"
+    _connect_failure_hint = "Make sure PipeWire is running with PulseAudio compatibility."
+    _sink_name_prefix = "proctap_pw_isolated"
+    _sink_description_prefix = "ProcTap_PipeWire_PID"
+    _capture_error_label = "Failed to start PipeWire capture"
+    _pulsectl_error_msg = (
+        "pulsectl library is required for PipeWire stream management. "
+        "Install it with: pip install pulsectl"
+    )
 
     def __init__(
         self,
@@ -613,23 +703,7 @@ class PipeWireStrategy(LinuxAudioStrategy):
             channels: Number of channels (default: 2 for stereo)
             sample_width: Bytes per sample (default: 2 for 16-bit)
         """
-        self._pid = pid
-        self._sample_rate = sample_rate
-        self._channels = channels
-        self._sample_width = sample_width
-        self._bits_per_sample = sample_width * 8
-
-        self._pulse: Any = None  # pulsectl.Pulse instance (using PulseAudio compat layer)
-        self._sink_input_index: Optional[int] = None
-        self._stream_id: Optional[str] = None
-        self._null_sink_index: Optional[int] = None
-        self._null_sink_name: Optional[str] = None
-        self._original_sink_index: Optional[int] = None
-        self._audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=50)  # ~500ms buffer
-        self._capture_thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
-        self._pulsectl: Any = None  # pulsectl module
-        self._chunk_duration_ms = 10  # Configurable chunk duration in milliseconds
+        self._init_common(pid, sample_rate, channels, sample_width)
 
         # Check if pw-record is available
         try:
@@ -647,276 +721,22 @@ class PipeWireStrategy(LinuxAudioStrategy):
             raise RuntimeError(f"Failed to check for pw-record: {e}") from e
 
         # Import pulsectl for stream management (PipeWire has PulseAudio compatibility)
-        try:
-            import pulsectl
-            self._pulsectl = pulsectl
-        except ImportError as e:
-            raise RuntimeError(
-                "pulsectl library is required for PipeWire stream management. "
-                "Install it with: pip install pulsectl"
-            ) from e
+        self._import_pulsectl()
 
-    def connect(self) -> None:
-        """Connect to PipeWire via PulseAudio compatibility layer."""
-        try:
-            self._pulse = self._pulsectl.Pulse('proctap-pipewire')
-            logger.info("Connected to PipeWire (via PulseAudio compatibility layer)")
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to connect to PipeWire: {e}. "
-                "Make sure PipeWire is running with PulseAudio compatibility."
-            ) from e
+    def _note_stream(self, sink_input: Any) -> None:
+        # PipeWire additionally exposes a native stream id we keep for diagnostics.
+        self._stream_id = sink_input.proplist.get('pipewire.stream.id')
 
-    def find_process_stream(self, pid: int) -> bool:
-        """
-        Find sink-input for the target process using PulseAudio compatibility API.
-
-        Args:
-            pid: Process ID to find
-
-        Returns:
-            True if stream found, False otherwise
-        """
-        if self._pulse is None:
-            raise RuntimeError("Not connected to PipeWire. Call connect() first.")
-
-        try:
-            sink_inputs = self._pulse.sink_input_list()
-            logger.debug(f"Found {len(sink_inputs)} sink inputs")
-
-            for sink_input in sink_inputs:
-                # Check application.process.id property
-                process_id_str = sink_input.proplist.get('application.process.id')
-                if process_id_str and process_id_str == str(pid):
-                    self._sink_input_index = sink_input.index
-                    # Try to get PipeWire stream ID
-                    self._stream_id = sink_input.proplist.get('pipewire.stream.id')
-                    logger.info(
-                        f"Found sink-input #{sink_input.index} for PID {pid}: "
-                        f"{sink_input.proplist.get('application.name', 'Unknown')}"
-                        f" (PW stream ID: {self._stream_id})"
-                    )
-                    return True
-
-            logger.warning(f"No audio stream found for PID {pid}")
-            return False
-
-        except Exception as e:
-            logger.error(f"Error finding process stream: {e}")
-            return False
-
-    def start_capture(self) -> None:
-        """
-        Start capturing audio using PipeWire.
-
-        Uses null-sink strategy similar to PulseAudio for isolation.
-        """
-        if self._sink_input_index is None:
-            raise RuntimeError("No sink-input found. Call find_process_stream() first.")
-
-        try:
-            # Get sink-input details
-            sink_input = self._pulse.sink_input_info(self._sink_input_index)
-            self._original_sink_index = sink_input.sink
-
-            # Use null-sink strategy for isolation
-            self._setup_isolated_capture()
-            logger.info(f"PipeWire isolated capture started for PID {self._pid}")
-
-        except Exception as e:
-            raise RuntimeError(f"Failed to start PipeWire capture: {e}") from e
-
-    def _setup_isolated_capture(self) -> None:
-        """Setup isolated capture using null-sink (same as PulseAudio strategy)."""
-        # Create null-sink
-        sink_name = f"proctap_pw_isolated_{self._pid}"
-        try:
-            self._null_sink_index = self._pulse.module_load(
-                'module-null-sink',
-                args=f'sink_name={sink_name} '
-                     f'sink_properties=device.description="ProcTap_PipeWire_PID_{self._pid}"'
-            )
-            self._null_sink_name = sink_name
-            logger.debug(f"Loaded null-sink: {sink_name} (index: {self._null_sink_index})")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load null-sink: {e}") from e
-
-        # Move sink-input to null-sink
-        try:
-            sinks = self._pulse.sink_list()
-            target_sink = None
-            for sink in sinks:
-                if sink.name == sink_name:
-                    target_sink = sink
-                    break
-
-            if target_sink is None:
-                raise RuntimeError(f"Could not find created null-sink: {sink_name}")
-
-            self._pulse.sink_input_move(self._sink_input_index, target_sink.index)
-            logger.debug(f"Moved sink-input #{self._sink_input_index} to null-sink #{target_sink.index}")
-        except Exception as e:
-            if self._null_sink_index is not None:
-                try:
-                    self._pulse.module_unload(self._null_sink_index)
-                except:
-                    pass
-            raise RuntimeError(f"Failed to move sink-input: {e}") from e
-
-        # Get monitor source
-        try:
-            sinks = self._pulse.sink_list()
-            null_sink = None
-            for sink in sinks:
-                if sink.name == sink_name:
-                    null_sink = sink
-                    break
-
-            if null_sink is None:
-                raise RuntimeError(f"Could not find null-sink: {sink_name}")
-
-            monitor_source_name = null_sink.monitor_source_name
-            logger.debug(f"Monitor source: {monitor_source_name}")
-        except Exception as e:
-            self._cleanup_isolation_modules()
-            raise RuntimeError(f"Failed to get monitor source: {e}") from e
-
-        # Start capture using pw-record
-        self._stop_event.clear()
-        self._capture_thread = threading.Thread(
-            target=self._capture_worker_pwrecord,
-            args=(monitor_source_name,),
-            daemon=True
-        )
-        self._capture_thread.start()
-
-    def _capture_worker_pwrecord(self, source_name: str) -> None:
-        """
-        Worker thread using pw-record for PipeWire-native capture.
-
-        Args:
-            source_name: Name of the source to capture from
-        """
-        try:
-            # Build pw-record command
-            # Note: pw-record uses different argument format than parec
-            cmd = [
-                'pw-record',
-                '--target', source_name,
-                '--rate', str(self._sample_rate),
-                '--channels', str(self._channels),
-                '--format', 's16',  # 16-bit signed
-                '-',  # Output to stdout
-            ]
-
-            logger.debug(f"Starting pw-record: {' '.join(cmd)}")
-
-            # Calculate chunk size for buffering
-            chunk_frames = int(self._sample_rate * (self._chunk_duration_ms / 1000.0))
-            chunk_bytes = chunk_frames * self._channels * self._sample_width
-
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=chunk_bytes,  # Buffer one chunk to reduce system calls
-            )
-
-            while not self._stop_event.is_set():
-                try:
-                    if proc.stdout is None:
-                        break
-                    chunk = proc.stdout.read(chunk_bytes)
-                    if not chunk:
-                        break
-
-                    if len(chunk) == chunk_bytes:
-                        try:
-                            self._audio_queue.put_nowait(chunk)
-                        except queue.Full:
-                            # Drop old frames
-                            try:
-                                self._audio_queue.get_nowait()
-                                self._audio_queue.put_nowait(chunk)
-                            except:
-                                pass
-
-                except Exception as e:
-                    logger.error(f"Error reading audio: {e}")
-                    break
-
-            # Clean up
-            proc.terminate()
-            try:
-                proc.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-
-            logger.debug("PipeWire capture worker stopped")
-
-        except Exception as e:
-            logger.error(f"PipeWire capture worker error: {e}")
-
-    def stop_capture(self) -> None:
-        """Stop capturing audio and clean up."""
-        self._stop_event.set()
-
-        if self._capture_thread and self._capture_thread.is_alive():
-            self._capture_thread.join(timeout=2.0)
-
-        self._cleanup_isolation_modules()
-        logger.info("PipeWire audio capture stopped")
-
-    def _cleanup_isolation_modules(self) -> None:
-        """Clean up PipeWire/PulseAudio modules."""
-        if not self._pulse:
-            return
-
-        # Restore sink-input
-        if (self._sink_input_index is not None and
-            self._original_sink_index is not None):
-            try:
-                sink_input = self._pulse.sink_input_info(self._sink_input_index)
-                if sink_input:
-                    self._pulse.sink_input_move(self._sink_input_index, self._original_sink_index)
-                    logger.debug(f"Restored sink-input to original sink")
-            except Exception as e:
-                logger.debug(f"Could not restore sink-input: {e}")
-
-        # Unload null-sink
-        if self._null_sink_index is not None:
-            try:
-                self._pulse.module_unload(self._null_sink_index)
-                logger.debug(f"Unloaded null-sink module")
-            except Exception as e:
-                logger.warning(f"Failed to unload null-sink: {e}")
-            finally:
-                self._null_sink_index = None
-                self._null_sink_name = None
-
-    def read_audio(self, timeout: float = 0.1) -> Optional[bytes]:
-        """Read audio data from capture buffer."""
-        try:
-            return self._audio_queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
-
-    def close(self) -> None:
-        """Clean up resources."""
-        self.stop_capture()
-
-        if self._pulse:
-            self._pulse.close()
-            self._pulse = None
-            logger.debug("Closed PipeWire connection")
-
-    def get_format(self) -> dict[str, int | str]:
-        """Get audio format information."""
-        return {
-            'sample_rate': self._sample_rate,
-            'channels': self._channels,
-            'bits_per_sample': self._bits_per_sample,
-        }
+    def _build_capture_command(self, source_name: str) -> list[str]:
+        # Note: pw-record uses a different argument format than parec
+        return [
+            'pw-record',
+            '--target', source_name,
+            '--rate', str(self._sample_rate),
+            '--channels', str(self._channels),
+            '--format', 's16',  # 16-bit signed
+            '-',  # Output to stdout
+        ]
 
 
 class PipeWireNativeStrategy(LinuxAudioStrategy):
@@ -1193,83 +1013,10 @@ class LinuxBackend(AudioBackend):
                     "Could not detect audio server type, defaulting to PulseAudio"
                 )
 
-        # Select strategy based on detected/specified engine
-        if detected_engine == "pipewire-native":
-            # Try native PipeWire strategy first
-            try:
-                self._strategy: LinuxAudioStrategy = PipeWireNativeStrategy(
-                    pid=pid,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sample_width=sample_width,
-                )
-                logger.info(
-                    f"Initialized LinuxBackend for PID {pid} "
-                    f"(engine: PipeWire Native API - ultra-low latency)"
-                )
-            except RuntimeError as e:
-                logger.warning(
-                    f"PipeWire native initialization failed, "
-                    f"falling back to subprocess: {e}"
-                )
-                # Fall back to subprocess-based PipeWire
-                try:
-                    self._strategy = PipeWireStrategy(
-                        pid=pid,
-                        sample_rate=sample_rate,
-                        channels=channels,
-                        sample_width=sample_width,
-                    )
-                    logger.info(
-                        f"Initialized LinuxBackend for PID {pid} (engine: PipeWire subprocess)"
-                    )
-                except RuntimeError as e2:
-                    logger.warning(f"PipeWire subprocess failed, falling back to PulseAudio: {e2}")
-                    self._strategy = PulseAudioStrategy(
-                        pid=pid,
-                        sample_rate=sample_rate,
-                        channels=channels,
-                        sample_width=sample_width,
-                    )
-                    logger.info(
-                        f"Initialized LinuxBackend for PID {pid} (engine: PulseAudio fallback)"
-                    )
-        elif detected_engine == "pulse":
-            self._strategy = PulseAudioStrategy(
-                pid=pid,
-                sample_rate=sample_rate,
-                channels=channels,
-                sample_width=sample_width,
-            )
-            logger.info(f"Initialized LinuxBackend for PID {pid} (engine: PulseAudio)")
-        elif detected_engine == "pipewire":
-            # Try PipeWire subprocess strategy, fall back to PulseAudio if it fails
-            try:
-                self._strategy = PipeWireStrategy(
-                    pid=pid,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sample_width=sample_width,
-                )
-                logger.info(f"Initialized LinuxBackend for PID {pid} (engine: PipeWire subprocess)")
-            except RuntimeError as e:
-                logger.warning(
-                    f"PipeWire initialization failed, falling back to PulseAudio: {e}"
-                )
-                self._strategy = PulseAudioStrategy(
-                    pid=pid,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    sample_width=sample_width,
-                )
-                logger.info(
-                    f"Initialized LinuxBackend for PID {pid} (engine: PulseAudio fallback)"
-                )
-        else:
-            raise ValueError(
-                f"Unknown engine: {engine}. "
-                f"Use 'auto', 'pulse', 'pipewire', or 'pipewire-native'"
-            )
+        # Select strategy by walking the ordered fallback chain for this engine.
+        self._strategy: LinuxAudioStrategy = self._create_strategy(
+            detected_engine, pid, sample_rate, channels, sample_width
+        )
 
         # Setup audio format converter
         # Linux backends always capture as int16, so we need to convert to float32
@@ -1291,6 +1038,67 @@ class LinuxBackend(AudioBackend):
             f"{STANDARD_SAMPLE_RATE}Hz/{STANDARD_CHANNELS}ch/float32 "
             f"(quality={resample_quality})"
         )
+
+    def _get_strategy_chain(self, engine: str) -> list[type[LinuxAudioStrategy]]:
+        """
+        Return the ordered strategy classes to try for ``engine``.
+
+        Earlier entries are preferred; later entries are fallbacks used when an
+        earlier strategy cannot initialize on this system.
+
+        Raises:
+            ValueError: If ``engine`` is not a recognised value.
+        """
+        chains: dict[str, list[type[LinuxAudioStrategy]]] = {
+            "pipewire-native": [PipeWireNativeStrategy, PipeWireStrategy, PulseAudioStrategy],
+            "pipewire": [PipeWireStrategy, PulseAudioStrategy],
+            "pulse": [PulseAudioStrategy],
+        }
+        try:
+            return chains[engine]
+        except KeyError:
+            raise ValueError(
+                f"Unknown engine: {engine}. "
+                f"Use 'auto', 'pulse', 'pipewire', or 'pipewire-native'"
+            )
+
+    def _create_strategy(
+        self,
+        engine: str,
+        pid: int,
+        sample_rate: int,
+        channels: int,
+        sample_width: int,
+    ) -> LinuxAudioStrategy:
+        """
+        Instantiate the first strategy in the chain that initializes successfully.
+
+        Raises:
+            ValueError: If ``engine`` is unknown.
+            RuntimeError: If every strategy in the chain fails to initialize.
+        """
+        last_error: Optional[Exception] = None
+        for strategy_class in self._get_strategy_chain(engine):
+            try:
+                strategy = strategy_class(
+                    pid=pid,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    sample_width=sample_width,
+                )
+                logger.info(
+                    f"Initialized LinuxBackend for PID {pid} "
+                    f"(strategy: {strategy_class.__name__})"
+                )
+                return strategy
+            except RuntimeError as e:
+                last_error = e
+                logger.warning(f"{strategy_class.__name__} initialization failed: {e}")
+
+        raise RuntimeError(
+            f"No audio capture strategy could be initialized for engine '{engine}'. "
+            f"Last error: {last_error}"
+        ) from last_error
 
     def start(self) -> None:
         """
@@ -1342,7 +1150,8 @@ class LinuxBackend(AudioBackend):
 
         Returns:
             PCM audio data as bytes in standard format (48kHz/2ch/float32),
-            or None if no data is available
+            or None if no data is available or the chunk could not be converted.
+            See AudioBackend.read for the shared sentinel convention.
         """
         if not self._is_running:
             return None
@@ -1354,8 +1163,9 @@ class LinuxBackend(AudioBackend):
             try:
                 data = self._converter.convert(data)
             except Exception as e:
+                # Recoverable: log and report "no usable data" (None), never b''.
                 logger.error(f"Error converting audio format: {e}")
-                return b''
+                return None
 
         return data
 
@@ -1387,7 +1197,9 @@ class LinuxBackend(AudioBackend):
         """Destructor to ensure cleanup."""
         try:
             self.close()
-        except:
+        except Exception:
+            # Suppress cleanup errors in the destructor, but let BaseException
+            # (e.g. KeyboardInterrupt, SystemExit) propagate.
             pass
 
 

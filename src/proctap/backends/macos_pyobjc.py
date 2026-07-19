@@ -621,7 +621,8 @@ class MacOSNativeBackend(AudioBackend):
         """Destructor to ensure cleanup."""
         try:
             self.close()
-        except:
+        except Exception:
+            # Suppress cleanup errors; let BaseException (KeyboardInterrupt) pass.
             pass
 
     def _create_aggregate_device(self) -> int:

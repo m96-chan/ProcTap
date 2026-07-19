@@ -10,12 +10,12 @@ All backends return audio in standard format: 48kHz/2ch/float32
 from __future__ import annotations
 
 import platform
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
+
+from .base import ResampleQuality
 
 if TYPE_CHECKING:
     from .base import AudioBackend
-
-ResampleQuality = Literal['best', 'medium', 'fast']
 
 
 def get_backend(pid: int, resample_quality: ResampleQuality = 'best') -> "AudioBackend":
