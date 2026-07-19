@@ -110,12 +110,33 @@ else:
     print(f"WARNING: Platform '{platform.system()}' is not officially supported")
     print("The package will install but audio capture will not work")
 
+def _processtap_app_package_data():
+    """Enumerate a pre-staged, signed+notarized proctap-helper.app for packaging.
+
+    The Process Tap helper is NOT built here (it needs Developer ID signing +
+    notarization, done in CI by swift/proctap-helper/ci_sign_notarize.sh, which
+    stages the bundle into src/proctap/bin/proctap-helper.app). setup.py only
+    packages it when present.
+    """
+    app = Path("src/proctap/bin/proctap-helper.app")
+    if not app.is_dir():
+        return []
+    return [
+        str(p.relative_to("src/proctap"))
+        for p in app.rglob("*")
+        if p.is_file()
+    ]
+
+
 setup(
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     ext_modules=ext_modules,
     package_data={
-        "proctap": ["bin/screencapture-audio"],  # Include ScreenCaptureKit Swift helper
+        "proctap": [
+            "bin/screencapture-audio",  # ScreenCaptureKit Swift helper (bundleID-based)
+            *_processtap_app_package_data(),  # signed Process Tap helper (.app), if staged
+        ],
     },
     cmdclass={
         "build_py": BuildPyCommand,

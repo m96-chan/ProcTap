@@ -93,6 +93,12 @@ class ProcessTapBackend(AudioBackend):
                 "swift/proctap-helper/build.sh (Developer ID signing required)."
             )
         self._exe = self.app_bundle / "Contents" / "MacOS" / "proctap-helper"
+        # Wheels don't preserve the executable bit on package_data; restore it.
+        try:
+            if self._exe.is_file() and not os.access(self._exe, os.X_OK):
+                self._exe.chmod(0o755)
+        except OSError:
+            pass
 
         self._tmpdir: Optional[str] = None
         self._fifo_path: Optional[str] = None
