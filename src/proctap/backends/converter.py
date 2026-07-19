@@ -12,12 +12,11 @@ from __future__ import annotations
 import numpy as np
 import logging
 import struct
-from typing import Optional, cast, Literal
+from typing import Optional, cast
+
+from .base import ResampleQuality
 
 logger = logging.getLogger(__name__)
-
-# Resample quality modes
-ResampleQuality = Literal['best', 'medium', 'fast']
 
 # libsamplerate converter type mapping
 SAMPLERATE_CONVERTER_TYPES = {

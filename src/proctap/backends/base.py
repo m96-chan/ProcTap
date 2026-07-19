@@ -12,7 +12,7 @@ All backends MUST convert audio to this standard format:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Literal, Optional
 import numpy as np
 
 
@@ -22,6 +22,10 @@ STANDARD_CHANNELS = 2
 STANDARD_FORMAT = 'float32'
 STANDARD_DTYPE = np.float32
 STANDARD_SAMPLE_WIDTH = 4  # bytes (32-bit float)
+
+# Canonical resample quality modes. Defined here (a dependency-free module that
+# every backend already imports) so all modules share a single source of truth.
+ResampleQuality = Literal['best', 'medium', 'fast']
 
 
 class AudioBackend(ABC):
