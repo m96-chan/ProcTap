@@ -94,7 +94,9 @@ addopts = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+# No fixed python_version: mypy targets the running interpreter so newer
+# numpy stubs (which use `type` statements requiring 3.12+) parse correctly
+# across the CI matrix. The 3.10 job still validates 3.10 compatibility.
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
