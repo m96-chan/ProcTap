@@ -149,3 +149,26 @@ class TestBackendFormat:
         assert fmt["channels"] == 2
         assert fmt["bits_per_sample"] == 32
         assert fmt["sample_format"] == "float32"
+
+
+class TestDestructor:
+    """Issue #36: __del__ must swallow Exception but let BaseException through."""
+
+    def test_del_swallows_normal_exception(self, linux_mod, patch_strategies):
+        patch_strategies()
+        b = linux_mod.LinuxBackend(pid=1, engine="pulse")
+        b.close = lambda: (_ for _ in ()).throw(RuntimeError("cleanup boom"))
+        b.__del__()  # must not raise
+
+    def test_del_propagates_keyboard_interrupt(self, linux_mod, patch_strategies):
+        patch_strategies()
+        b = linux_mod.LinuxBackend(pid=1, engine="pulse")
+
+        def interrupt():
+            raise KeyboardInterrupt
+
+        b.close = interrupt
+        with pytest.raises(KeyboardInterrupt):
+            b.__del__()
+        # Neutralize close so the eventual GC __del__ doesn't re-raise during collection.
+        b.close = lambda: None

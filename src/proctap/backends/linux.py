@@ -382,8 +382,8 @@ class _PulseCompatStrategy(LinuxAudioStrategy):
             if self._null_sink_index is not None:
                 try:
                     self._pulse.module_unload(self._null_sink_index)
-                except:
-                    pass
+                except Exception as unload_err:
+                    logger.debug(f"Failed to unload null-sink during cleanup: {unload_err}")
             raise RuntimeError(f"Failed to move sink-input: {e}") from e
 
         # Step 3: Get the null-sink's monitor source
@@ -447,7 +447,8 @@ class _PulseCompatStrategy(LinuxAudioStrategy):
                             try:
                                 self._audio_queue.get_nowait()
                                 self._audio_queue.put_nowait(chunk)
-                            except:
+                            except Exception:
+                                # Best-effort drop; racing consumer emptied it, etc.
                                 pass
 
                 except Exception as e:
@@ -1194,7 +1195,9 @@ class LinuxBackend(AudioBackend):
         """Destructor to ensure cleanup."""
         try:
             self.close()
-        except:
+        except Exception:
+            # Suppress cleanup errors in the destructor, but let BaseException
+            # (e.g. KeyboardInterrupt, SystemExit) propagate.
             pass
 
 
