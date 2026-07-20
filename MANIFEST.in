@@ -2,6 +2,14 @@
 recursive-include src/proctap/swift/screencapture-audio *.swift
 include src/proctap/swift/screencapture-audio/Package.swift
 
+# Include Process Tap (PID-based) Swift helper source + build/sign scripts
+recursive-include src/proctap/swift/proctap-helper *.swift
+include src/proctap/swift/proctap-helper/Package.swift
+include src/proctap/swift/proctap-helper/Info.plist
+include src/proctap/swift/proctap-helper/proctap-helper.entitlements
+include src/proctap/swift/proctap-helper/*.sh
+include src/proctap/swift/proctap-helper/README.md
+
 # Include documentation
 include README.md
 include LICENSE

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>proctap-helper</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.proctap.helper</string>
+	<key>CFBundleName</key>
+	<string>ProcTap Helper</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleVersion</key>
+	<string>1.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.4</string>
+	<!-- Background helper: no Dock icon / UI. -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- TCC usage strings shown in the permission prompts. -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>ProcTap captures audio from a specific process using the Core Audio Process Tap API.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ProcTap needs audio input access to capture per-process audio via Core Audio Process Tap.</string>
+</dict>
+</plist>
