@@ -480,18 +480,15 @@ class AudioConverter:
                 result_mono: np.ndarray = signal.resample_poly(audio, up, down).astype(np.float32)  # type: ignore[no-any-return]
                 return result_mono
             else:
-                # Multi-channel: process along axis=0 (time axis), vectorized per-channel
-                # Note: resample_poly doesn't support multi-channel directly, so we still need a loop
-                # but we optimize by pre-allocating and avoiding redundant calculations
-                num_samples = audio.shape[0]
-                new_num_samples = int(num_samples * ratio)
-                num_channels = audio.shape[1]
-                resampled = np.empty((new_num_samples, num_channels), dtype=np.float32)
-
-                # Process all channels (optimized with pre-allocation)
-                for ch in range(num_channels):
-                    resampled[:, ch] = signal.resample_poly(audio[:, ch], up, down)
-
+                # Multi-channel: resample each channel and stack. Do NOT pre-allocate
+                # to int(n*ratio) — resample_poly returns ceil(n*up/down) samples,
+                # which differs for most chunk sizes and previously raised a
+                # broadcast error (silently falling back to the FFT method).
+                channels_out = [
+                    signal.resample_poly(audio[:, ch], up, down).astype(np.float32)
+                    for ch in range(audio.shape[1])
+                ]
+                resampled = np.stack(channels_out, axis=1)
                 return resampled
         except Exception as e:
             logger.warning(f"scipy.resample_poly failed, falling back to FFT method: {e}")
