@@ -7,6 +7,7 @@ import AVFoundation
 @_silgen_name("AudioHardwareCreateProcessTap")
 func AudioHardwareCreateProcessTap(_ tapDescription: AnyObject, _ outTapID: UnsafeMutablePointer<AudioObjectID>) -> OSStatus
 
+@discardableResult
 @_silgen_name("AudioHardwareDestroyProcessTap")
 func AudioHardwareDestroyProcessTap(_ tapID: AudioObjectID) -> OSStatus
 
@@ -22,10 +23,13 @@ func requestMicrophonePermission() -> Bool {
     dlog("Requesting microphone permission...\n")
 
     let semaphore = DispatchSemaphore(value: 0)
-    var granted = false
+    // A reference-type box avoids capturing/mutating a `var` in the escaping
+    // completion handler (the semaphore serializes the write and the read).
+    final class ResultBox: @unchecked Sendable { var granted = false }
+    let box = ResultBox()
 
     AVCaptureDevice.requestAccess(for: .audio) { result in
-        granted = result
+        box.granted = result
         if result {
             dlog("Microphone permission granted\n")
         } else {
@@ -43,7 +47,7 @@ func requestMicrophonePermission() -> Bool {
         return false
     }
 
-    return granted
+    return box.granted
 }
 
 @available(macOS 14.2, *)
