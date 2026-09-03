@@ -126,19 +126,15 @@ class FakePulse:
 
 @pytest.fixture(autouse=True)
 def fake_pulsectl(monkeypatch):
-    """Install a fake ``pulsectl`` module and make ``which pw-record`` succeed."""
+    """Install fake Linux capture dependencies for strategy unit tests."""
     fake_module = types.ModuleType("pulsectl")
     fake_module.Pulse = FakePulse  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "pulsectl", fake_module)
 
     import proctap.backends.linux as linux_mod
 
-    # pw-record availability probe used by PipeWireStrategy.__init__
-    monkeypatch.setattr(
-        linux_mod.subprocess,
-        "run",
-        lambda *a, **k: types.SimpleNamespace(returncode=0),
-    )
+    # PipeWireStrategy requires all three command-line tools at construction.
+    monkeypatch.setattr(linux_mod.shutil, "which", lambda command: f"/usr/bin/{command}")
     return fake_module
 
 
