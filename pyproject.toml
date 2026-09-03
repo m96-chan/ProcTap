@@ -27,6 +27,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: C++",
     "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -93,7 +94,9 @@ addopts = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+# No fixed python_version: mypy targets the running interpreter so newer
+# numpy stubs (which use `type` statements requiring 3.12+) parse correctly
+# across the CI matrix. The 3.10 job still validates 3.10 compatibility.
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

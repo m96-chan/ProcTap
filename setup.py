@@ -110,14 +110,65 @@ else:
     print(f"WARNING: Platform '{platform.system()}' is not officially supported")
     print("The package will install but audio capture will not work")
 
+def _processtap_app_package_data():
+    """Enumerate a pre-staged, signed+notarized proctap-helper.app for packaging.
+
+    The Process Tap helper is NOT built here (it needs Developer ID signing +
+    notarization, done in CI by swift/proctap-helper/ci_sign_notarize.sh, which
+    stages the bundle into src/proctap/bin/proctap-helper.app). setup.py only
+    packages it when present.
+    """
+    app = Path("src/proctap/bin/proctap-helper.app")
+    if not app.is_dir():
+        return []
+    return [
+        str(p.relative_to("src/proctap"))
+        for p in app.rglob("*")
+        if p.is_file()
+    ]
+
+
+# On macOS the wheel bundles platform-specific Swift helper binaries
+# (screencapture-audio, the signed proctap-helper.app). Without a platform tag
+# the macOS wheel would be 'py3-none-any' — colliding with the Linux/Windows
+# pure-Python wheel on publish, so only one survives and the macOS binaries are
+# dropped. Tag macOS wheels 'py3-none-macosx_*' instead: platform-specific (no
+# collision, installs only on macOS) yet Python-version-agnostic (one wheel for
+# all 3.x).
+_cmdclass = {"build_py": BuildPyCommand}
+try:
+    try:
+        from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel  # setuptools>=70.1
+    except ImportError:
+        from wheel.bdist_wheel import bdist_wheel as _bdist_wheel  # type: ignore[no-redef]
+
+    class _PlatformWheel(_bdist_wheel):  # type: ignore[valid-type,misc]
+        def finalize_options(self):
+            super().finalize_options()
+            if platform.system() == "Darwin":
+                # Mark non-pure so the tag carries a macosx_* platform.
+                self.root_is_pure = False
+
+        def get_tag(self):
+            impl, abi, plat = super().get_tag()
+            if platform.system() == "Darwin":
+                return ("py3", "none", plat)
+            return (impl, abi, plat)
+
+    _cmdclass["bdist_wheel"] = _PlatformWheel
+except ImportError:
+    pass  # wheel/bdist_wheel unavailable (e.g. sdist-only build); keep default tag
+
+
 setup(
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     ext_modules=ext_modules,
     package_data={
-        "proctap": ["bin/screencapture-audio"],  # Include ScreenCaptureKit Swift helper
+        "proctap": [
+            "bin/screencapture-audio",  # ScreenCaptureKit Swift helper (bundleID-based)
+            *_processtap_app_package_data(),  # signed Process Tap helper (.app), if staged
+        ],
     },
-    cmdclass={
-        "build_py": BuildPyCommand,
-    },
+    cmdclass=_cmdclass,
 )

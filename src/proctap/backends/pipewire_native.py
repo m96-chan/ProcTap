@@ -1061,7 +1061,8 @@ class PipeWireNodeDiscovery:
         """Destructor."""
         try:
             self._cleanup()
-        except:
+        except Exception:
+            # Suppress cleanup errors; let BaseException (KeyboardInterrupt) pass.
             pass
 
 
@@ -1372,5 +1373,6 @@ class PipeWireStreamCapture:
         """Destructor."""
         try:
             self.stop()
-        except:
+        except Exception:
+            # Suppress cleanup errors; let BaseException (KeyboardInterrupt) pass.
             pass

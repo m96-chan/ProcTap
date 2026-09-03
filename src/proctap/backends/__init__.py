@@ -10,12 +10,12 @@ All backends return audio in standard format: 48kHz/2ch/float32
 from __future__ import annotations
 
 import platform
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
+
+from .base import ResampleQuality
 
 if TYPE_CHECKING:
     from .base import AudioBackend
-
-ResampleQuality = Literal['best', 'medium', 'fast']
 
 
 def get_backend(pid: int, resample_quality: ResampleQuality = 'best') -> "AudioBackend":
@@ -64,7 +64,19 @@ def get_backend(pid: int, resample_quality: ResampleQuality = 'best') -> "AudioB
         import logging
         log = logging.getLogger(__name__)
 
-        # Try ScreenCaptureKit first (RECOMMENDED - macOS 13+, works on Apple Silicon)
+        # Try the PID-based Process Tap helper first when it is built + signed.
+        # This matches Windows/Linux per-PID semantics (vs ScreenCaptureKit's
+        # bundleID model). Requires the signed proctap-helper.app and Screen
+        # Recording permission granted to it.
+        try:
+            from .macos_processtap import ProcessTapBackend, is_available as pt_available
+            if pt_available():
+                log.info("Using Core Audio Process Tap backend (PID-based, macOS 14.4+)")
+                return ProcessTapBackend(pid=pid, resample_quality=resample_quality)
+        except ImportError as e:
+            log.debug(f"Process Tap backend not available: {e}")
+
+        # Try ScreenCaptureKit next (macOS 13+, bundleID-based, Apple Silicon compatible)
         try:
             from .macos_screencapture import ScreenCaptureBackend, is_available as sc_available
             if sc_available():

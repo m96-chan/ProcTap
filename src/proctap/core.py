@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Optional, AsyncIterator, Literal
+from typing import Callable, Optional, AsyncIterator
 import threading
 import queue
 import asyncio
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 from .backends import get_backend
 from .backends.base import (
     AudioBackend,
+    ResampleQuality,
     STANDARD_SAMPLE_RATE,
     STANDARD_CHANNELS,
     STANDARD_FORMAT,
@@ -23,9 +24,6 @@ from .backends.base import (
 )
 
 AudioCallback = Callable[[bytes, int], None]  # (pcm_bytes, num_frames)
-
-# Resample quality modes
-ResampleQuality = Literal['best', 'medium', 'fast']
 
 
 class ProcessAudioCapture:
