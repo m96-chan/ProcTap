@@ -126,19 +126,15 @@ class FakePulse:
 
 @pytest.fixture(autouse=True)
 def fake_pulsectl(monkeypatch):
-    """Install a fake ``pulsectl`` module and make ``which pw-record`` succeed."""
+    """Install fake Linux capture dependencies for strategy unit tests."""
     fake_module = types.ModuleType("pulsectl")
     fake_module.Pulse = FakePulse  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "pulsectl", fake_module)
 
     import proctap.backends.linux as linux_mod
 
-    # pw-record availability probe used by PipeWireStrategy.__init__
-    monkeypatch.setattr(
-        linux_mod.subprocess,
-        "run",
-        lambda *a, **k: types.SimpleNamespace(returncode=0),
-    )
+    # PipeWireStrategy requires all three command-line tools at construction.
+    monkeypatch.setattr(linux_mod.shutil, "which", lambda command: f"/usr/bin/{command}")
     return fake_module
 
 
@@ -209,8 +205,9 @@ class TestInit:
 
     def test_pipewire_requires_pwrecord(self, monkeypatch, linux_mod):
         monkeypatch.setattr(
-            linux_mod.subprocess, "run",
-            lambda *a, **k: types.SimpleNamespace(returncode=1),
+            linux_mod.shutil,
+            "which",
+            lambda command: None if command == "pw-record" else f"/usr/bin/{command}",
         )
         with pytest.raises(RuntimeError, match="pw-record"):
             linux_mod.PipeWireStrategy(pid=1)
@@ -287,7 +284,10 @@ class TestFindProcessStream:
 # start_capture + isolation setup
 # ---------------------------------------------------------------------------
 
-BOTH = ["PulseAudioStrategy", "PipeWireStrategy"]
+# The routing/lifecycle tests below exercise the shared sink-input-move path.
+# PipeWireStrategy intentionally overrides that path with explicit pw-link
+# routing; its behavior is covered by test_linux_pw_link_helpers.py.
+BOTH = ["PulseAudioStrategy"]
 
 
 class TestStartCapture:
@@ -430,21 +430,11 @@ class TestCaptureWorker:
         assert "mysource" in captured["cmd"]
         assert s._audio_queue.qsize() == 2
 
-    def test_pipewire_uses_pwrecord(self, linux_mod, monkeypatch):
+    def test_pipewire_capture_worker_reads_record_process(self, linux_mod):
         s = linux_mod.PipeWireStrategy(pid=1)
         cb = self._chunk_bytes(s)
-        captured = {}
-
-        def fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return FakeProc([b"\x01" * cb])
-
-        monkeypatch.setattr(linux_mod.subprocess, "Popen", fake_popen)
-        # Both strategies expose the same worker entrypoint after refactor; before
-        # refactor PipeWire uses _capture_worker_pwrecord. Call whichever exists.
-        worker = getattr(s, "_capture_worker_pwrecord", None) or s._capture_worker
-        worker("mysource")
-        assert captured["cmd"][0] == "pw-record"
+        s._record_proc = FakeProc([b"\x01" * cb])
+        s._pcm_drain_worker(cb)
         assert s._audio_queue.qsize() == 1
 
     def test_queue_full_drops_oldest(self, linux_mod, monkeypatch):
