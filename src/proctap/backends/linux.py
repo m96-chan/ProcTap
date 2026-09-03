@@ -1091,7 +1091,7 @@ class PipeWireStrategy(_PulseCompatStrategy):
 
         # Step 4: start drain threads on the (now-linked) recorder pipe.
         self._capture_thread = threading.Thread(
-            target=self._capture_worker,
+            target=self._pcm_drain_worker,
             args=(chunk_bytes,),
             daemon=True,
         )
@@ -1157,7 +1157,7 @@ class PipeWireStrategy(_PulseCompatStrategy):
             f"to pw-record input (id={rec_node_id})"
         )
 
-    def _capture_worker(self, chunk_bytes: int) -> None:
+    def _pcm_drain_worker(self, chunk_bytes: int) -> None:
         """Drain raw PCM from the recorder subprocess into the audio queue."""
         proc = self._record_proc
         if proc is None or proc.stdout is None:

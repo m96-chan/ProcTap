@@ -434,7 +434,7 @@ class TestCaptureWorker:
         s = linux_mod.PipeWireStrategy(pid=1)
         cb = self._chunk_bytes(s)
         s._record_proc = FakeProc([b"\x01" * cb])
-        s._capture_worker(cb)
+        s._pcm_drain_worker(cb)
         assert s._audio_queue.qsize() == 1
 
     def test_queue_full_drops_oldest(self, linux_mod, monkeypatch):
