@@ -21,7 +21,7 @@ def benchmark_format_detection_caching():
     converter = AudioConverter(
         src_rate=44100, src_channels=2, src_width=2,
         dst_rate=44100, dst_channels=2, dst_width=2,
-        auto_detect_format=True
+        auto_detect_format=False  # Fix: Set auto_detect_format=False
     )
 
     # Create 10ms of audio at 44.1kHz stereo (1764 bytes)
@@ -73,7 +73,7 @@ def benchmark_channel_conversion():
         converter = AudioConverter(
             src_rate=44100, src_channels=src_ch, src_width=2,
             dst_rate=44100, dst_channels=dst_ch, dst_width=2,
-            auto_detect_format=False
+            auto_detect_format=False  # Fix: Set auto_detect_format=False
         )
 
         # Create 10ms of audio
@@ -128,7 +128,7 @@ def benchmark_24bit_conversion():
             src_rate=44100, src_channels=channels, src_width=src_width,
             dst_rate=44100, dst_channels=channels, dst_width=dst_width,
             src_format=src_fmt, dst_format=dst_fmt,
-            auto_detect_format=False
+            auto_detect_format=False  # Fix: Set auto_detect_format=False
         )
 
         # Create 10ms of audio
@@ -181,7 +181,7 @@ def benchmark_complex_conversion():
     converter = AudioConverter(
         src_rate=44100, src_channels=2, src_width=2,
         dst_rate=48000, dst_channels=1, dst_width=2,
-        auto_detect_format=False
+        auto_detect_format=False  # Fix: Set auto_detect_format=False
     )
 
     # Create 10ms of audio
